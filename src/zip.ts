@@ -9,6 +9,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", wasm: "application/wasm",
   json: "application/json", html: "text/html", css: "text/css", js: "text/javascript", ts: "text/typescript",
 };
+const BINARY_SIGNATURES = new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP"]);
 
 export function safeZipPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
@@ -41,6 +42,13 @@ function hexPreview(bytes: Uint8Array): string {
   return [...bytes.slice(0, 48)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
+function looksLikeText(bytes: Uint8Array): boolean {
+  if (!bytes.length) return true;
+  const sample = bytes.slice(0, 512);
+  const printable = sample.filter((byte) => byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte <= 126)).length;
+  return printable / sample.length >= 0.85;
+}
+
 export async function scanZip(file: Blob, onProgress?: (done: number, total: number) => void): Promise<ScanReport> {
   const zip = await JSZip.loadAsync(file);
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
@@ -63,7 +71,7 @@ export async function scanZip(file: Blob, onProgress?: (done: number, total: num
     const ext = extension(path);
     const mime = MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
     const sig = signature(bytes);
-    const isText = TEXT_EXTENSIONS.has(ext) || (bytes.length > 0 && !bytes.slice(0, 512).some((b) => b === 0));
+    const isText = TEXT_EXTENSIONS.has(ext) || (!BINARY_SIGNATURES.has(sig) && looksLikeText(bytes));
     const sha256 = await hash(bytes);
     let text: string | undefined;
     if (isText && bytes.length <= 2 * 1024 * 1024) text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);

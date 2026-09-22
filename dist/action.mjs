@@ -9796,6 +9796,7 @@ var MIME_BY_EXTENSION = {
   js: "text/javascript",
   ts: "text/typescript"
 };
+var BINARY_SIGNATURES = /* @__PURE__ */ new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP"]);
 function safeZipPath(path) {
   const normalized = path.replaceAll("\\", "/");
   return !normalized.startsWith("/") && !/^[a-zA-Z]:/.test(normalized) && !normalized.split("/").some((part) => part === ".." || part === "");
@@ -9821,6 +9822,12 @@ async function hash(bytes) {
 function hexPreview(bytes) {
   return [...bytes.slice(0, 48)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
+function looksLikeText(bytes) {
+  if (!bytes.length) return true;
+  const sample = bytes.slice(0, 512);
+  const printable = sample.filter((byte) => byte === 9 || byte === 10 || byte === 13 || byte >= 32 && byte <= 126).length;
+  return printable / sample.length >= 0.85;
+}
 async function scanZip(file, onProgress) {
   const zip = await import_jszip.default.loadAsync(file);
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
@@ -9843,7 +9850,7 @@ async function scanZip(file, onProgress) {
     const ext = extension(path);
     const mime = MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
     const sig = signature(bytes);
-    const isText = TEXT_EXTENSIONS.has(ext) || bytes.length > 0 && !bytes.slice(0, 512).some((b) => b === 0);
+    const isText = TEXT_EXTENSIONS.has(ext) || !BINARY_SIGNATURES.has(sig) && looksLikeText(bytes);
     const sha256 = await hash(bytes);
     let text;
     if (isText && bytes.length <= 2 * 1024 * 1024) text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
