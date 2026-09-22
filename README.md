@@ -36,7 +36,7 @@ jobs:
           path: docs/project-overview.md
 ```
 
-Pin the action to a release tag such as `@v1` once releases are published. `input`, `output`, `style`, `template`, `instruction`, optional `summary` JSON output, `exclude`, `max-files`, and `max-uncompressed-mb` are supported. For large repositories, exclude generated/vendor content:
+Pin the action to a release tag such as `@v1` once releases are published. `input`, `output`, `style`, `template`, `instruction`, optional `summary` JSON output, `manifest`, `exclude`, `max-files`, and `max-uncompressed-mb` are supported. The manifest is versioned JSON for downstream indexing, dashboards, or policy checks. For large repositories, exclude generated/vendor content:
 
 ```yaml
 with:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateMarkdown } from "./markdown";
+import { generateManifest, generateMarkdown } from "./markdown";
 
 describe("Markdown generation", () => {
   it("includes readable content and useful binary metadata", () => {
@@ -24,5 +24,12 @@ describe("Markdown generation", () => {
     ] }, "field-notes");
     expect(output).toContain("Duplicate content");
     expect(output).toContain("`a.txt` · `copy.txt`");
+  });
+  it("creates a versioned machine-readable manifest", () => {
+    const manifest = generateManifest({ totalBytes: 1, warnings: [], duplicateGroups: [], files: [
+      { path: "readme.md", extension: "md", mime: "text/markdown", signature: "unknown", size: 1, status: "included", reason: "included", text: "x" },
+    ] });
+    expect(manifest).toContain('"schema": "zygor-to-md/v1"');
+    expect(manifest).toContain('"readable": 1');
   });
 });

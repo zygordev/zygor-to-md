@@ -20,6 +20,27 @@ function renderFile(file: FileReport, template: string): string {
   return template.replaceAll("{{path}}", file.path).replaceAll("{{metadata}}", metadata(file)).replaceAll("{{content}}", content);
 }
 
+function anchor(path: string): string {
+  return path.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+export function generateManifest(report: ScanReport): string {
+  return JSON.stringify({
+    schema: "zygor-to-md/v1",
+    generatedAt: new Date().toISOString(),
+    totals: {
+      files: report.files.length,
+      bytes: report.totalBytes,
+      readable: report.files.filter((file) => file.status === "included").length,
+      preserved: report.files.filter((file) => file.status !== "included").length,
+      duplicateGroups: report.duplicateGroups.length,
+    },
+    files: report.files,
+    duplicateGroups: report.duplicateGroups,
+    warnings: report.warnings,
+  }, null, 2);
+}
+
 export function generateMarkdown(report: ScanReport, style: Style, template = defaultTemplate, instruction = ""): string {
   const title = style === "catalog" ? "# Project catalog" : style === "compact" ? "# Project snapshot" : "# Project field notes";
   const hint = instruction.trim() ? `\n> Local formatting instruction: ${instruction.trim()}\n` : "";
@@ -27,9 +48,16 @@ export function generateMarkdown(report: ScanReport, style: Style, template = de
   const body = report.files.map((file) => renderFile(file, template)).join("\n\n---\n\n");
   const directories = [...new Set(report.files.map((file) => file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "(root)"))].sort();
   const directorySummary = `## Directory map\n\n${directories.map((directory) => `- \`${directory}\``).join("\n")}`;
+  const toc = `## Contents\n\n- [Directory map](#directory-map)\n- [File inventory](#files)\n${report.files.map((file) => `- [\`${file.path}\`](#${anchor(file.path)})`).join("\n")}`;
+  const extensionCounts = new Map<string, number>();
+  for (const file of report.files) extensionCounts.set(file.extension, (extensionCounts.get(file.extension) ?? 0) + 1);
+  const typeSummary = `## File types\n\n${[...extensionCounts.entries()].sort((a, b) => b[1] - a[1]).map(([extension, count]) => `- \`${extension}\`: ${count}`).join("\n")}`;
+  const largest = [...report.files].sort((a, b) => b.size - a.size).slice(0, 10);
+  const largestSummary = largest.length ? `## Largest files\n\n${largest.map((file) => `- \`${file.path}\` — ${size(file.size)}`).join("\n")}` : "";
   const duplicates = report.duplicateGroups.length
     ? `\n\n## Duplicate content\n\n${report.duplicateGroups.map((group) => `- ${group.map((path) => `\`${path}\``).join(" · ")}`).join("\n")}`
     : "";
   const warnings = report.warnings.length ? `\n\n## Warnings\n\n${report.warnings.map((w) => `- ${w}`).join("\n")}` : "";
-  return `${intro}\n\n${directorySummary}\n\n## Files\n\n${body}${duplicates}${warnings}\n`;
+  const bodyWithAnchors = report.files.map((file) => `<a id="${anchor(file.path)}"></a>\n${renderFile(file, template)}`).join("\n\n---\n\n");
+  return `${intro}\n\n${toc}\n\n${directorySummary}\n\n${typeSummary}\n\n${largestSummary}\n\n## Files\n\n${bodyWithAnchors}${duplicates}${warnings}\n`;
 }

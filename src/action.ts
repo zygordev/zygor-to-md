@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, stat, readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import JSZip from "jszip";
 import { scanZip } from "./zip";
-import { defaultTemplate, generateMarkdown, type Style } from "./markdown";
+import { defaultTemplate, generateManifest, generateMarkdown, type Style } from "./markdown";
 
 function input(name: string, fallback = ""): string {
   return process.env[`INPUT_${name.toUpperCase().replaceAll("-", "_")}`] || fallback;
@@ -50,6 +50,11 @@ async function main() {
   if (summaryPath) {
     await mkdir(dirname(resolve(summaryPath)), { recursive: true });
     await writeFile(resolve(summaryPath), JSON.stringify(report, null, 2), "utf8");
+  }
+  const manifestPath = input("manifest");
+  if (manifestPath) {
+    await mkdir(dirname(resolve(manifestPath)), { recursive: true });
+    await writeFile(resolve(manifestPath), generateManifest(report), "utf8");
   }
 }
 

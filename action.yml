@@ -25,6 +25,9 @@ inputs:
   summary:
     description: Optional JSON scan report output path.
     required: false
+  manifest:
+    description: Optional machine-readable manifest JSON output path.
+    required: false
   exclude:
     description: Comma-separated glob patterns to omit, for example node_modules/**,.git/**,*.map.
     required: false
@@ -47,6 +50,7 @@ runs:
         INPUT_TEMPLATE: ${{ inputs.template }}
         INPUT_INSTRUCTION: ${{ inputs.instruction }}
         INPUT_SUMMARY: ${{ inputs.summary }}
+        INPUT_MANIFEST: ${{ inputs.manifest }}
         INPUT_EXCLUDE: ${{ inputs.exclude }}
         INPUT_MAX_FILES: ${{ inputs.max-files }}
         INPUT_MAX_UNCOMPRESSED_MB: ${{ inputs.max-uncompressed-mb }}
