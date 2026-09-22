@@ -9914,6 +9914,25 @@ ${file.text.replaceAll("```", "``\\`")}
 > Hex: \`${file.hex ?? "unavailable"}\``;
   return template.replaceAll("{{path}}", file.path).replaceAll("{{metadata}}", metadata(file)).replaceAll("{{content}}", content);
 }
+function anchor(path) {
+  return path.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+function generateManifest(report) {
+  return JSON.stringify({
+    schema: "zygor-to-md/v1",
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    totals: {
+      files: report.files.length,
+      bytes: report.totalBytes,
+      readable: report.files.filter((file) => file.status === "included").length,
+      preserved: report.files.filter((file) => file.status !== "included").length,
+      duplicateGroups: report.duplicateGroups.length
+    },
+    files: report.files,
+    duplicateGroups: report.duplicateGroups,
+    warnings: report.warnings
+  }, null, 2);
+}
 function generateMarkdown(report, style, template = defaultTemplate, instruction = "") {
   const title = style === "catalog" ? "# Project catalog" : style === "compact" ? "# Project snapshot" : "# Project field notes";
   const hint = instruction.trim() ? `
@@ -9929,6 +9948,20 @@ function generateMarkdown(report, style, template = defaultTemplate, instruction
   const directorySummary = `## Directory map
 
 ${directories.map((directory) => `- \`${directory}\``).join("\n")}`;
+  const toc = `## Contents
+
+- [Directory map](#directory-map)
+- [File inventory](#files)
+${report.files.map((file) => `- [\`${file.path}\`](#${anchor(file.path)})`).join("\n")}`;
+  const extensionCounts = /* @__PURE__ */ new Map();
+  for (const file of report.files) extensionCounts.set(file.extension, (extensionCounts.get(file.extension) ?? 0) + 1);
+  const typeSummary = `## File types
+
+${[...extensionCounts.entries()].sort((a, b) => b[1] - a[1]).map(([extension2, count]) => `- \`${extension2}\`: ${count}`).join("\n")}`;
+  const largest = [...report.files].sort((a, b) => b.size - a.size).slice(0, 10);
+  const largestSummary = largest.length ? `## Largest files
+
+${largest.map((file) => `- \`${file.path}\` \u2014 ${size(file.size)}`).join("\n")}` : "";
   const duplicates = report.duplicateGroups.length ? `
 
 ## Duplicate content
@@ -9939,13 +9972,21 @@ ${report.duplicateGroups.map((group) => `- ${group.map((path) => `\`${path}\``).
 ## Warnings
 
 ${report.warnings.map((w) => `- ${w}`).join("\n")}` : "";
+  const bodyWithAnchors = report.files.map((file) => `<a id="${anchor(file.path)}"></a>
+${renderFile(file, template)}`).join("\n\n---\n\n");
   return `${intro}
+
+${toc}
 
 ${directorySummary}
 
+${typeSummary}
+
+${largestSummary}
+
 ## Files
 
-${body}${duplicates}${warnings}
+${bodyWithAnchors}${duplicates}${warnings}
 `;
 }
 
@@ -9995,6 +10036,11 @@ async function main() {
   if (summaryPath) {
     await mkdir(dirname(resolve(summaryPath)), { recursive: true });
     await writeFile(resolve(summaryPath), JSON.stringify(report, null, 2), "utf8");
+  }
+  const manifestPath = input("manifest");
+  if (manifestPath) {
+    await mkdir(dirname(resolve(manifestPath)), { recursive: true });
+    await writeFile(resolve(manifestPath), generateManifest(report), "utf8");
   }
 }
 main().catch((error) => {
