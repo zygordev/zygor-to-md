@@ -9879,7 +9879,13 @@ async function scanZip(file, onProgress, options = {}) {
     });
     onProgress?.(index + 1, entries.length);
   }
-  return { files, warnings, totalBytes };
+  const byHash = /* @__PURE__ */ new Map();
+  for (const file2 of files) {
+    if (file2.sha256) byHash.set(file2.sha256, [...byHash.get(file2.sha256) ?? [], file2.path]);
+  }
+  const duplicateGroups = [...byHash.values()].filter((paths) => paths.length > 1);
+  if (duplicateGroups.length) warnings.push(`Found ${duplicateGroups.length} duplicate content group${duplicateGroups.length === 1 ? "" : "s"}.`);
+  return { files, warnings, totalBytes, duplicateGroups };
 }
 
 // src/markdown.ts
@@ -9919,6 +9925,15 @@ function generateMarkdown(report, style, template = defaultTemplate, instruction
 
 **${report.files.length} files** \xB7 **${size(report.totalBytes)} uncompressed**`;
   const body = report.files.map((file) => renderFile(file, template)).join("\n\n---\n\n");
+  const directories = [...new Set(report.files.map((file) => file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "(root)"))].sort();
+  const directorySummary = `## Directory map
+
+${directories.map((directory) => `- \`${directory}\``).join("\n")}`;
+  const duplicates = report.duplicateGroups.length ? `
+
+## Duplicate content
+
+${report.duplicateGroups.map((group) => `- ${group.map((path) => `\`${path}\``).join(" \xB7 ")}`).join("\n")}` : "";
   const warnings = report.warnings.length ? `
 
 ## Warnings
@@ -9926,9 +9941,11 @@ function generateMarkdown(report, style, template = defaultTemplate, instruction
 ${report.warnings.map((w) => `- ${w}`).join("\n")}` : "";
   return `${intro}
 
+${directorySummary}
+
 ## Files
 
-${body}${warnings}
+${body}${duplicates}${warnings}
 `;
 }
 

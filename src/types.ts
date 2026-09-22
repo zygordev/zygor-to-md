@@ -18,4 +18,5 @@ export interface ScanReport {
   files: FileReport[];
   warnings: string[];
   totalBytes: number;
+  duplicateGroups: string[][];
 }
