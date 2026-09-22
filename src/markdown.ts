@@ -25,6 +25,11 @@ export function generateMarkdown(report: ScanReport, style: Style, template = de
   const hint = instruction.trim() ? `\n> Local formatting instruction: ${instruction.trim()}\n` : "";
   const intro = `${title}\n\n> Generated locally by Zygor-to-MD. Original files are never uploaded.${hint}\n\n**${report.files.length} files** · **${size(report.totalBytes)} uncompressed**`;
   const body = report.files.map((file) => renderFile(file, template)).join("\n\n---\n\n");
+  const directories = [...new Set(report.files.map((file) => file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "(root)"))].sort();
+  const directorySummary = `## Directory map\n\n${directories.map((directory) => `- \`${directory}\``).join("\n")}`;
+  const duplicates = report.duplicateGroups.length
+    ? `\n\n## Duplicate content\n\n${report.duplicateGroups.map((group) => `- ${group.map((path) => `\`${path}\``).join(" · ")}`).join("\n")}`
+    : "";
   const warnings = report.warnings.length ? `\n\n## Warnings\n\n${report.warnings.map((w) => `- ${w}`).join("\n")}` : "";
-  return `${intro}\n\n## Files\n\n${body}${warnings}\n`;
+  return `${intro}\n\n${directorySummary}\n\n## Files\n\n${body}${duplicates}${warnings}\n`;
 }

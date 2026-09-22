@@ -98,5 +98,11 @@ export async function scanZip(file: Blob, onProgress?: (done: number, total: num
     });
     onProgress?.(index + 1, entries.length);
   }
-  return { files, warnings, totalBytes };
+  const byHash = new Map<string, string[]>();
+  for (const file of files) {
+    if (file.sha256) byHash.set(file.sha256, [...(byHash.get(file.sha256) ?? []), file.path]);
+  }
+  const duplicateGroups = [...byHash.values()].filter((paths) => paths.length > 1);
+  if (duplicateGroups.length) warnings.push(`Found ${duplicateGroups.length} duplicate content group${duplicateGroups.length === 1 ? "" : "s"}.`);
+  return { files, warnings, totalBytes, duplicateGroups };
 }
