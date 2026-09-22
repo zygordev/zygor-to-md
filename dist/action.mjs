@@ -9828,10 +9828,19 @@ function looksLikeText(bytes) {
   const printable = sample.filter((byte) => byte === 9 || byte === 10 || byte === 13 || byte >= 32 && byte <= 126).length;
   return printable / sample.length >= 0.85;
 }
-async function scanZip(file, onProgress) {
+function matchesExclude(path, patterns) {
+  return patterns.some((pattern) => {
+    const escaped = pattern.trim().replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*").replaceAll("?", ".");
+    return new RegExp(`^${escaped}$`).test(path);
+  });
+}
+async function scanZip(file, onProgress, options = {}) {
   const zip = await import_jszip.default.loadAsync(file);
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-  if (entries.length > MAX_FILES) throw new Error(`ZIP contains ${entries.length.toLocaleString()} files; the limit is ${MAX_FILES.toLocaleString()}.`);
+  const maxFiles = options.maxFiles ?? MAX_FILES;
+  const maxBytes = options.maxUncompressedBytes ?? MAX_UNCOMPRESSED_BYTES;
+  const excluded = options.exclude ?? [];
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir && !matchesExclude(entry.name, excluded));
+  if (entries.length > maxFiles) throw new Error(`ZIP contains ${entries.length.toLocaleString()} files after exclusions; the limit is ${maxFiles.toLocaleString()}.`);
   let totalBytes = 0;
   const warnings = [];
   const files = [];
@@ -9846,7 +9855,7 @@ async function scanZip(file, onProgress) {
     }
     const bytes = await entry.async("uint8array");
     totalBytes += bytes.byteLength;
-    if (totalBytes > MAX_UNCOMPRESSED_BYTES) throw new Error(`Uncompressed ZIP content exceeds ${MAX_UNCOMPRESSED_BYTES / 1024 / 1024} MB.`);
+    if (totalBytes > maxBytes) throw new Error(`Uncompressed ZIP content exceeds ${maxBytes / 1024 / 1024} MB.`);
     const ext = extension(path);
     const mime = MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
     const sig = signature(bytes);
@@ -9927,12 +9936,19 @@ ${body}${warnings}
 function input(name, fallback = "") {
   return process.env[`INPUT_${name.toUpperCase().replaceAll("-", "_")}`] || fallback;
 }
+function numberInput(name, fallback) {
+  const value = Number(input(name));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 async function main() {
   const inputPath = resolve(input("input", "."));
   const outputPath = resolve(input("output", "project-overview.md"));
   const style = input("style", "field-notes");
   const template = input("template", defaultTemplate);
   const instruction = input("instruction");
+  const exclude = input("exclude").split(",").map((value) => value.trim()).filter(Boolean);
+  const maxFiles = numberInput("max-files", 2e3);
+  const maxBytes = numberInput("max-uncompressed-mb", 100) * 1024 * 1024;
   const inputStat = await stat(inputPath);
   let archive;
   if (inputStat.isDirectory()) {
@@ -9951,11 +9967,12 @@ async function main() {
   } else {
     archive = await readFile(inputPath);
   }
-  const report = await scanZip(new Blob([archive]));
+  const report = await scanZip(new Blob([archive]), void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
   const markdown = generateMarkdown(report, style, template, instruction);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, markdown, "utf8");
   console.log(`Generated ${outputPath} (${report.files.length} files scanned).`);
+  console.log(`Included ${report.files.filter((file) => file.status === "included").length} readable files; preserved ${report.files.filter((file) => file.status !== "included").length} binary or unsupported files.`);
   if (report.warnings.length) console.warn(report.warnings.join("\n"));
   const summaryPath = input("summary");
   if (summaryPath) {

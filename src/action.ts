@@ -7,6 +7,10 @@ import { defaultTemplate, generateMarkdown, type Style } from "./markdown";
 function input(name: string, fallback = ""): string {
   return process.env[`INPUT_${name.toUpperCase().replaceAll("-", "_")}`] || fallback;
 }
+function numberInput(name: string, fallback: number): number {
+  const value = Number(input(name));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 async function main() {
   const inputPath = resolve(input("input", "."));
@@ -14,6 +18,9 @@ async function main() {
   const style = input("style", "field-notes") as Style;
   const template = input("template", defaultTemplate);
   const instruction = input("instruction");
+  const exclude = input("exclude").split(",").map((value) => value.trim()).filter(Boolean);
+  const maxFiles = numberInput("max-files", 2000);
+  const maxBytes = numberInput("max-uncompressed-mb", 100) * 1024 * 1024;
   const inputStat = await stat(inputPath);
   let archive: Uint8Array;
   if (inputStat.isDirectory()) {
@@ -32,11 +39,12 @@ async function main() {
   } else {
     archive = await readFile(inputPath);
   }
-  const report = await scanZip(new Blob([archive]));
+  const report = await scanZip(new Blob([archive]), undefined, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
   const markdown = generateMarkdown(report, style, template, instruction);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, markdown, "utf8");
   console.log(`Generated ${outputPath} (${report.files.length} files scanned).`);
+  console.log(`Included ${report.files.filter((file) => file.status === "included").length} readable files; preserved ${report.files.filter((file) => file.status !== "included").length} binary or unsupported files.`);
   if (report.warnings.length) console.warn(report.warnings.join("\n"));
   const summaryPath = input("summary");
   if (summaryPath) {

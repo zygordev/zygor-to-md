@@ -25,6 +25,17 @@ inputs:
   summary:
     description: Optional JSON scan report output path.
     required: false
+  exclude:
+    description: Comma-separated glob patterns to omit, for example node_modules/**,.git/**,*.map.
+    required: false
+  max-files:
+    description: Maximum files to scan after exclusions.
+    required: false
+    default: "2000"
+  max-uncompressed-mb:
+    description: Maximum uncompressed content to scan in megabytes.
+    required: false
+    default: "100"
 runs:
   using: composite
   steps:
@@ -36,4 +47,7 @@ runs:
         INPUT_TEMPLATE: ${{ inputs.template }}
         INPUT_INSTRUCTION: ${{ inputs.instruction }}
         INPUT_SUMMARY: ${{ inputs.summary }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_MAX_FILES: ${{ inputs.max-files }}
+        INPUT_MAX_UNCOMPRESSED_MB: ${{ inputs.max-uncompressed-mb }}
       run: node "$GITHUB_ACTION_PATH/dist/action.mjs"

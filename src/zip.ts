@@ -10,6 +10,11 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   json: "application/json", html: "text/html", css: "text/css", js: "text/javascript", ts: "text/typescript",
 };
 const BINARY_SIGNATURES = new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP"]);
+export interface ScanOptions {
+  maxFiles?: number;
+  maxUncompressedBytes?: number;
+  exclude?: string[];
+}
 
 export function safeZipPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
@@ -49,10 +54,20 @@ function looksLikeText(bytes: Uint8Array): boolean {
   return printable / sample.length >= 0.85;
 }
 
-export async function scanZip(file: Blob, onProgress?: (done: number, total: number) => void): Promise<ScanReport> {
+function matchesExclude(path: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    const escaped = pattern.trim().replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*").replaceAll("?", ".");
+    return new RegExp(`^${escaped}$`).test(path);
+  });
+}
+
+export async function scanZip(file: Blob, onProgress?: (done: number, total: number) => void, options: ScanOptions = {}): Promise<ScanReport> {
   const zip = await JSZip.loadAsync(file);
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-  if (entries.length > MAX_FILES) throw new Error(`ZIP contains ${entries.length.toLocaleString()} files; the limit is ${MAX_FILES.toLocaleString()}.`);
+  const maxFiles = options.maxFiles ?? MAX_FILES;
+  const maxBytes = options.maxUncompressedBytes ?? MAX_UNCOMPRESSED_BYTES;
+  const excluded = options.exclude ?? [];
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir && !matchesExclude(entry.name, excluded));
+  if (entries.length > maxFiles) throw new Error(`ZIP contains ${entries.length.toLocaleString()} files after exclusions; the limit is ${maxFiles.toLocaleString()}.`);
   let totalBytes = 0;
   const warnings: string[] = [];
   const files: FileReport[] = [];
@@ -67,7 +82,7 @@ export async function scanZip(file: Blob, onProgress?: (done: number, total: num
     }
     const bytes = await entry.async("uint8array");
     totalBytes += bytes.byteLength;
-    if (totalBytes > MAX_UNCOMPRESSED_BYTES) throw new Error(`Uncompressed ZIP content exceeds ${MAX_UNCOMPRESSED_BYTES / 1024 / 1024} MB.`);
+    if (totalBytes > maxBytes) throw new Error(`Uncompressed ZIP content exceeds ${maxBytes / 1024 / 1024} MB.`);
     const ext = extension(path);
     const mime = MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
     const sig = signature(bytes);
