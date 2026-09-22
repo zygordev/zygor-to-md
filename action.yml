@@ -1,0 +1,39 @@
+name: Zygor-to-MD
+description: Generate a deterministic Markdown project guide from a ZIP archive in GitHub Actions.
+author: zygordev
+branding:
+  icon: file-text
+  color: green
+inputs:
+  input:
+    description: Path to a ZIP archive, or a directory to archive first.
+    required: true
+  output:
+    description: Markdown output path.
+    required: false
+    default: project-overview.md
+  style:
+    description: field-notes, catalog, or compact.
+    required: false
+    default: field-notes
+  template:
+    description: Optional template using {{path}}, {{metadata}}, and {{content}}.
+    required: false
+  instruction:
+    description: Deterministic local formatting instruction included in the document.
+    required: false
+  summary:
+    description: Optional JSON scan report output path.
+    required: false
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_INPUT: ${{ inputs.input }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_STYLE: ${{ inputs.style }}
+        INPUT_TEMPLATE: ${{ inputs.template }}
+        INPUT_INSTRUCTION: ${{ inputs.instruction }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+      run: node "$GITHUB_ACTION_PATH/dist/action.mjs"

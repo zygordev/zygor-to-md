@@ -1,0 +1,21 @@
+{
+  "name": "zygor-to-md",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest run",
+    "build:action": "esbuild src/action.ts --bundle --platform=node --format=esm --outfile=dist/action.mjs"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "esbuild": "^0.24.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8"
+  }
+}
