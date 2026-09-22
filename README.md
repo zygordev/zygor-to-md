@@ -15,6 +15,8 @@ Run the focused checks with `npm test` and create a production build with `npm r
 
 The repository is also a reusable composite action. It accepts either a ZIP archive or a checked-out directory, and runs entirely on the GitHub-hosted runner:
 
+For a ready-made interactive workflow, copy [`.github/workflows/zygor-example.yml`](.github/workflows/zygor-example.yml) into your repository. Then **Actions → Generate project guide → Run workflow** lets you enter the input path, output name, style, exclusions, and scan limits in GitHub's form.
+
 ```yaml
 name: Project guide
 on: [workflow_dispatch]

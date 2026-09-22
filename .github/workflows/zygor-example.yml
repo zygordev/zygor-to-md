@@ -1,0 +1,71 @@
+name: Generate project guide
+
+on:
+  workflow_dispatch:
+    inputs:
+      input:
+        description: ZIP filename or project directory path
+        required: true
+        default: .
+        type: string
+      output:
+        description: Markdown output path
+        required: true
+        default: project-overview.md
+        type: string
+      style:
+        description: Markdown style
+        required: true
+        default: catalog
+        type: choice
+        options:
+          - field-notes
+          - catalog
+          - compact
+      instruction:
+        description: Optional deterministic formatting instruction
+        required: false
+        default: ""
+        type: string
+      exclude:
+        description: Comma-separated glob patterns to skip
+        required: false
+        default: node_modules/**,.git/**,dist/**,build/**,*.map
+        type: string
+      max-files:
+        description: Maximum files to scan
+        required: true
+        default: "10000"
+        type: string
+      max-uncompressed-mb:
+        description: Maximum uncompressed content in MB
+        required: true
+        default: "500"
+        type: string
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate Markdown guide
+        uses: zygordev/zygor-to-md@v1
+        with:
+          input: ${{ inputs.input }}
+          output: ${{ inputs.output }}
+          style: ${{ inputs.style }}
+          instruction: ${{ inputs.instruction }}
+          exclude: ${{ inputs.exclude }}
+          max-files: ${{ inputs.max-files }}
+          max-uncompressed-mb: ${{ inputs.max-uncompressed-mb }}
+          manifest: project-manifest.json
+
+      - name: Upload Markdown and manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: zygor-project-guide
+          path: |
+            ${{ inputs.output }}
+            project-manifest.json
