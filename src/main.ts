@@ -42,6 +42,9 @@ app.innerHTML = `
   </main>`;
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
+function on(selector: string, event: string, handler: EventListener) {
+  document.querySelector(selector)?.addEventListener(event, handler);
+}
 const dropzone = $("#dropzone") as HTMLElement;
 const input = $("#fileInput") as HTMLInputElement;
 dropzone.addEventListener("click", () => input.click());
@@ -69,11 +72,23 @@ function render() {
   ($("#preview") as HTMLTextAreaElement).value = markdown; renderTree();
 }
 function renderTree() { if (!report) return; const needle = filter.toLowerCase(); $("#fileTree").innerHTML = report.files.filter((f) => f.path.toLowerCase().includes(needle)).map((f) => `<div class="file-row"><span class="file-status ${f.status}"></span><span class="file-name">${f.path}</span><span class="file-size">${f.size.toLocaleString()} B</span></div>`).join(""); }
-["style", "template", "instruction"].forEach((id) => $(id).addEventListener("input", render));
-$("#filter").addEventListener("input", (event) => { filter = (event.target as HTMLInputElement).value; renderTree(); });
-$("#preview").addEventListener("input", (event) => { markdown = (event.target as HTMLTextAreaElement).value; });
-function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); }
-$("#downloadMd").addEventListener("click", () => download(new Blob([markdown], { type: "text/markdown" }), "project-overview.md"));
-$("#downloadOriginal").addEventListener("click", () => { if (originalZip) download(originalZip, originalZip.name); });
-$("#copy").addEventListener("click", async () => { await navigator.clipboard.writeText(markdown); ($("#copy") as HTMLButtonElement).textContent = "Copied"; setTimeout(() => ($("#copy") as HTMLButtonElement).textContent = "Copy", 1200); });
-$("#downloadPackage").addEventListener("click", async () => { if (!originalZip || !report) return; const zip = new JSZip(); const style = ($("#style") as HTMLSelectElement).value as Style; const template = ($("#template") as HTMLTextAreaElement).value; const instruction = ($("#instruction") as HTMLInputElement).value; zip.file(originalZip.name, originalZip); zip.file("project-overview.md", markdown); zip.file("llms.txt", generateLlms(report)); zip.file("context-pack.json", generateContextPack(report)); zip.file("project.sarif", generateSarif(report)); zip.file("dependency-graph.mmd", generateMermaid(report)); zip.file("project.html", generateHtml(report, style, template, instruction)); zip.file("manifest.json", JSON.stringify({ generatedAt: new Date().toISOString(), source: originalZip.name, files: report.files }, null, 2)); download(await zip.generateAsync({ type: "blob" }), "zygor-to-md-package.zip"); });
+["style", "template", "instruction"].forEach((id) => on(`#${id}`, "input", render));
+on("#filter", "input", (event) => { filter = (event.target as HTMLInputElement).value; renderTree(); });
+on("#preview", "input", (event) => { markdown = (event.target as HTMLTextAreaElement).value; });
+function download(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+    anchor.remove();
+  }, 1000);
+}
+on("#downloadMd", "click", () => download(new Blob([markdown], { type: "text/markdown" }), "project-overview.md"));
+on("#downloadOriginal", "click", () => { if (originalZip) download(originalZip, originalZip.name); });
+on("#copy", "click", async () => { await navigator.clipboard.writeText(markdown); ($("#copy") as HTMLButtonElement).textContent = "Copied"; setTimeout(() => ($("#copy") as HTMLButtonElement).textContent = "Copy", 1200); });
+on("#downloadPackage", "click", async () => { if (!originalZip || !report) return; const zip = new JSZip(); const style = ($("#style") as HTMLSelectElement).value as Style; const template = ($("#template") as HTMLTextAreaElement).value; const instruction = ($("#instruction") as HTMLInputElement).value; zip.file(originalZip.name, originalZip); zip.file("project-overview.md", markdown); zip.file("llms.txt", generateLlms(report)); zip.file("context-pack.json", generateContextPack(report)); zip.file("project.sarif", generateSarif(report)); zip.file("dependency-graph.mmd", generateMermaid(report)); zip.file("project.html", generateHtml(report, style, template, instruction)); zip.file("manifest.json", JSON.stringify({ generatedAt: new Date().toISOString(), source: originalZip.name, files: report.files }, null, 2)); download(await zip.generateAsync({ type: "blob" }), "zygor-to-md-package.zip"); });
