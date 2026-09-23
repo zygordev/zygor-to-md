@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -13,10 +13,10 @@ await writeFile(join(root, "binary.bin"), Buffer.alloc(128 * 1024, 7));
 await (await import("node:fs/promises")).mkdir(sample, { recursive: true });
 for (const name of ["package.json", "README.md", "main.js", "binary.bin"]) await (await import("node:fs/promises")).rename(join(root, name), join(sample, name));
 
-function run() {
+function run(command = process.execPath, args = ["dist/action.mjs"]) {
   return new Promise((resolve, reject) => {
     const started = performance.now();
-    const child = spawn(process.execPath, ["dist/action.mjs"], { cwd: process.cwd(), env: { ...process.env, INPUT_INPUT: sample, INPUT_OUTPUT: join(root, "guide.md") } });
+    const child = spawn(command, args.map((arg) => arg.replaceAll("{input}", sample).replaceAll("{output}", join(root, "guide.md"))), { cwd: process.cwd(), env: { ...process.env, INPUT_INPUT: sample, INPUT_OUTPUT: join(root, "guide.md") } });
     let output = "";
     child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { output += chunk; });
@@ -25,7 +25,17 @@ function run() {
   });
 }
 
-const runs = [];
-for (let index = 0; index < 5; index++) runs.push(await run());
-console.log(JSON.stringify({ tool: "zygor-to-md", runs, note: "Run competing tools with the same fixture and compare wall time, output size, and detected facts.", fixture: sample }, null, 2));
+async function benchmark(name, command, args) {
+  const runs = [];
+  for (let index = 0; index < 5; index++) {
+    const result = await run(command, args);
+    runs.push({ ...result, outputBytes: (await stat(join(root, "guide.md"))).size });
+  }
+  return { name, runs };
+}
+
+const competitors = JSON.parse(process.env.BENCHMARK_COMMANDS ?? "[]");
+const results = [await benchmark("zygor-to-md", process.execPath, ["dist/action.mjs"] )];
+for (const competitor of competitors) results.push(await benchmark(competitor.name, competitor.command, competitor.args ?? []));
+console.log(JSON.stringify({ results, note: "Competitor args may use {input} and {output}; compare timing, output size, and detected facts on the same fixture.", fixture: sample }, null, 2));
 await rm(root, { recursive: true, force: true });

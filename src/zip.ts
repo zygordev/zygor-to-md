@@ -9,7 +9,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", wasm: "application/wasm",
   json: "application/json", html: "text/html", css: "text/css", js: "text/javascript", ts: "text/typescript",
 };
-const BINARY_SIGNATURES = new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP"]);
+const BINARY_SIGNATURES = new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP", "WASM", "SQLite", "WAV", "MP3", "MP4", "WEBM", "TTF", "OTF"]);
 export interface ScanOptions {
   maxFiles?: number;
   maxUncompressedBytes?: number;
@@ -42,6 +42,14 @@ function signature(bytes: Uint8Array): string {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "JPEG";
   if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "PDF";
   if (bytes.length >= 4 && bytes[0] === 0x1f && bytes[1] === 0x8b) return "GZIP";
+  if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 && bytes[3] === 0x6d) return "WASM";
+  if (bytes.length >= 16 && new TextDecoder().decode(bytes.slice(0, 16)) === "SQLite format 3\0") return "SQLite";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) return "WAV";
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return "MP3";
+  if (bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) return "MP4";
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "WEBM";
+  if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x01 && bytes[2] === 0x00 && bytes[3] === 0x00) return "TTF";
+  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x54 && bytes[2] === 0x54 && bytes[3] === 0x4f) return "OTF";
   return "unknown";
 }
 
@@ -55,11 +63,23 @@ function hexPreview(bytes: Uint8Array): string {
   return [...bytes.slice(0, 48)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
-function metadata(bytes: Uint8Array, sig: string): Record<string, string | number | boolean> | undefined {
+function metadata(bytes: Uint8Array, sig: string, ext = ""): Record<string, string | number | boolean> | undefined {
   if (sig === "PNG" && bytes.length >= 24) return { width: (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19], height: (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23], colorType: bytes[25] };
-  if (sig === "JPEG") return { format: "JPEG", hasExif: new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).includes("Exif") };
+  if (sig === "JPEG") {
+    let width = 0;
+    let height = 0;
+    for (let index = 2; index + 9 < bytes.length; index++) if (bytes[index] === 0xff && [0xc0, 0xc1, 0xc2, 0xc3].includes(bytes[index + 1])) { height = (bytes[index + 5] << 8) | bytes[index + 6]; width = (bytes[index + 7] << 8) | bytes[index + 8]; break; }
+    return { format: "JPEG", width, height, hasExif: new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).includes("Exif") };
+  }
   if (sig === "PDF") return { pages: (new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 2 * 1024 * 1024))).match(/\/Type\s*\/Page\b/g) ?? []).length };
-  if (sig === "ZIP/PK") return { archive: true };
+  if (sig === "ZIP/PK") return { archive: true, kind: ["jar", "apk", "docx", "xlsx", "pptx", "odt", "epub"].includes(ext) ? ext.toUpperCase() : "ZIP" };
+  if (sig === "WASM") return { format: "WebAssembly", version: bytes.length >= 8 ? bytes[4] : 0 };
+  if (sig === "SQLite") return { format: "SQLite", pageSize: bytes.length >= 18 ? (bytes[16] << 8) | bytes[17] : 0, encrypted: bytes.length >= 16 && bytes[15] !== 0 };
+  if (sig === "WAV" && bytes.length >= 44) return { format: "WAV", channels: bytes[22] | (bytes[23] << 8), sampleRate: bytes[24] | (bytes[25] << 8) | (bytes[26] << 16) | (bytes[27] << 24) };
+  if (sig === "MP4") return { format: "MP4", container: new TextDecoder().decode(bytes.slice(8, 12)) };
+  if (sig === "WEBM") return { format: "WebM" };
+  if (sig === "MP3") return { format: "MP3", id3: true };
+  if (sig === "TTF" || sig === "OTF") return { format: sig === "TTF" ? "TrueType" : "OpenType" };
   return undefined;
 }
 
@@ -129,7 +149,7 @@ export async function scanEntries(entries: ScanEntry[], onProgress?: (done: numb
     if (isText && bytes.length <= 2 * 1024 * 1024) text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     const status = text !== undefined ? "included" : "preserved";
     files.push({
-      path, extension: ext || "(none)", mime, signature: sig, size: bytes.byteLength, sha256, status, metadata: metadata(bytes, sig), cache: "miss",
+      path, extension: ext || "(none)", mime, signature: sig, size: bytes.byteLength, sha256, status, metadata: metadata(bytes, sig, ext), cache: "miss",
       reason: text !== undefined ? "Readable text included in Markdown." : "Binary or large file preserved outside Markdown.",
       text, preview: text ? text.slice(0, 240).replace(/\s+/g, " ") : undefined, hex: text ? undefined : hexPreview(bytes),
     });

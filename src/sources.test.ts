@@ -28,4 +28,10 @@ describe("archive sources and incremental cache", () => {
     expect(second.cache?.hits).toBe(1);
     expect(second.files[0].cache).toBe("hit");
   });
+
+  it("preserves rich metadata for opaque binary files", async () => {
+    const report = await scanEntries([{ name: "module.wasm", read: async () => new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]) }]);
+    expect(report.files[0].signature).toBe("WASM");
+    expect(report.files[0].metadata).toEqual({ format: "WebAssembly", version: 1 });
+  });
 });

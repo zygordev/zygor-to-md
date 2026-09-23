@@ -58,7 +58,7 @@ with:
 
 Drop a ZIP, TAR, TAR.GZ, or browse for a local folder. Large browser scans run in a Web Worker, and unchanged file reports are reused from an IndexedDB cache. The scanner enforces a 2,000-file and 100 MB unpacked limit, rejects absolute/traversal paths, never executes files, and reports readable files separately from preserved binary/media/archive files. The project model detects manifests, run commands, entry points, APIs, configuration, infrastructure, databases, tests, resolved imports, generated/vendor content, and confidence-scored secrets. Choose a built-in style, edit the template with `{{path}}`, `{{metadata}}`, and `{{content}}`, or add a deterministic local formatting instruction. Download Markdown, the untouched original archive, or a package containing Markdown, `manifest.json`, `llms.txt`, `context-pack.json`, SARIF, Mermaid, and HTML.
 
-The Action supports `changed-report` for Git diff name/status output and opt-in `pr-comment` publishing through the standard GitHub token. Run `npm run benchmark` to produce five local timing samples; use the same fixture and output metrics when comparing another repository-to-text tool.
+The Action supports `changed-report` for Git diff name/status output and opt-in `pr-comment` publishing through the standard GitHub token. Run `npm run benchmark` to produce five local timing samples. To compare another executable on the same fixture, set `BENCHMARK_COMMANDS` to a JSON array such as `[{"name":"other-tool","command":"other-tool.exe","args":["{input}","--output","{output}"]}]`.
 
 ## Privacy and limitations
 

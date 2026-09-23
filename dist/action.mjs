@@ -9797,7 +9797,7 @@ var MIME_BY_EXTENSION = {
   js: "text/javascript",
   ts: "text/typescript"
 };
-var BINARY_SIGNATURES = /* @__PURE__ */ new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP"]);
+var BINARY_SIGNATURES = /* @__PURE__ */ new Set(["ZIP/PK", "PNG", "JPEG", "PDF", "GZIP", "WASM", "SQLite", "WAV", "MP3", "MP4", "WEBM", "TTF", "OTF"]);
 function safeZipPath(path) {
   const normalized = path.replaceAll("\\", "/");
   return !normalized.startsWith("/") && !/^[a-zA-Z]:/.test(normalized) && !normalized.split("/").some((part) => part === ".." || part === "");
@@ -9813,6 +9813,14 @@ function signature(bytes) {
   if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "JPEG";
   if (bytes.length >= 4 && bytes[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70) return "PDF";
   if (bytes.length >= 4 && bytes[0] === 31 && bytes[1] === 139) return "GZIP";
+  if (bytes.length >= 4 && bytes[0] === 0 && bytes[1] === 97 && bytes[2] === 115 && bytes[3] === 109) return "WASM";
+  if (bytes.length >= 16 && new TextDecoder().decode(bytes.slice(0, 16)) === "SQLite format 3\0") return "SQLite";
+  if (bytes.length >= 12 && bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 65 && bytes[10] === 86 && bytes[11] === 69) return "WAV";
+  if (bytes.length >= 3 && bytes[0] === 73 && bytes[1] === 68 && bytes[2] === 51) return "MP3";
+  if (bytes.length >= 12 && bytes[4] === 102 && bytes[5] === 116 && bytes[6] === 121 && bytes[7] === 112) return "MP4";
+  if (bytes.length >= 4 && bytes[0] === 26 && bytes[1] === 69 && bytes[2] === 223 && bytes[3] === 163) return "WEBM";
+  if (bytes.length >= 4 && bytes[0] === 0 && bytes[1] === 1 && bytes[2] === 0 && bytes[3] === 0) return "TTF";
+  if (bytes.length >= 4 && bytes[0] === 79 && bytes[1] === 84 && bytes[2] === 84 && bytes[3] === 79) return "OTF";
   return "unknown";
 }
 async function hash(bytes) {
@@ -9823,11 +9831,27 @@ async function hash(bytes) {
 function hexPreview(bytes) {
   return [...bytes.slice(0, 48)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
-function metadata(bytes, sig) {
+function metadata(bytes, sig, ext = "") {
   if (sig === "PNG" && bytes.length >= 24) return { width: bytes[16] << 24 | bytes[17] << 16 | bytes[18] << 8 | bytes[19], height: bytes[20] << 24 | bytes[21] << 16 | bytes[22] << 8 | bytes[23], colorType: bytes[25] };
-  if (sig === "JPEG") return { format: "JPEG", hasExif: new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).includes("Exif") };
+  if (sig === "JPEG") {
+    let width = 0;
+    let height = 0;
+    for (let index = 2; index + 9 < bytes.length; index++) if (bytes[index] === 255 && [192, 193, 194, 195].includes(bytes[index + 1])) {
+      height = bytes[index + 5] << 8 | bytes[index + 6];
+      width = bytes[index + 7] << 8 | bytes[index + 8];
+      break;
+    }
+    return { format: "JPEG", width, height, hasExif: new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).includes("Exif") };
+  }
   if (sig === "PDF") return { pages: (new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 2 * 1024 * 1024))).match(/\/Type\s*\/Page\b/g) ?? []).length };
-  if (sig === "ZIP/PK") return { archive: true };
+  if (sig === "ZIP/PK") return { archive: true, kind: ["jar", "apk", "docx", "xlsx", "pptx", "odt", "epub"].includes(ext) ? ext.toUpperCase() : "ZIP" };
+  if (sig === "WASM") return { format: "WebAssembly", version: bytes.length >= 8 ? bytes[4] : 0 };
+  if (sig === "SQLite") return { format: "SQLite", pageSize: bytes.length >= 18 ? bytes[16] << 8 | bytes[17] : 0, encrypted: bytes.length >= 16 && bytes[15] !== 0 };
+  if (sig === "WAV" && bytes.length >= 44) return { format: "WAV", channels: bytes[22] | bytes[23] << 8, sampleRate: bytes[24] | bytes[25] << 8 | bytes[26] << 16 | bytes[27] << 24 };
+  if (sig === "MP4") return { format: "MP4", container: new TextDecoder().decode(bytes.slice(8, 12)) };
+  if (sig === "WEBM") return { format: "WebM" };
+  if (sig === "MP3") return { format: "MP3", id3: true };
+  if (sig === "TTF" || sig === "OTF") return { format: sig === "TTF" ? "TrueType" : "OpenType" };
   return void 0;
 }
 function looksLikeText(bytes) {
@@ -9901,7 +9925,7 @@ async function scanEntries(entries, onProgress, options = {}) {
       size: bytes.byteLength,
       sha256,
       status,
-      metadata: metadata(bytes, sig),
+      metadata: metadata(bytes, sig, ext),
       cache: "miss",
       reason: text2 !== void 0 ? "Readable text included in Markdown." : "Binary or large file preserved outside Markdown.",
       text: text2,
