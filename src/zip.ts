@@ -14,11 +14,13 @@ export interface ScanOptions {
   maxFiles?: number;
   maxUncompressedBytes?: number;
   exclude?: string[];
+  cache?: Map<string, FileReport>;
 }
 
 export interface ScanEntry {
   name: string;
   dir?: boolean;
+  unsafeReason?: string;
   read: () => Promise<Uint8Array>;
 }
 
@@ -53,6 +55,14 @@ function hexPreview(bytes: Uint8Array): string {
   return [...bytes.slice(0, 48)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
+function metadata(bytes: Uint8Array, sig: string): Record<string, string | number | boolean> | undefined {
+  if (sig === "PNG" && bytes.length >= 24) return { width: (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19], height: (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23], colorType: bytes[25] };
+  if (sig === "JPEG") return { format: "JPEG", hasExif: new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).includes("Exif") };
+  if (sig === "PDF") return { pages: (new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 2 * 1024 * 1024))).match(/\/Type\s*\/Page\b/g) ?? []).length };
+  if (sig === "ZIP/PK") return { archive: true };
+  return undefined;
+}
+
 function looksLikeText(bytes: Uint8Array): boolean {
   if (!bytes.length) return true;
   const sample = bytes.slice(0, 512);
@@ -76,9 +86,22 @@ export async function scanEntries(entries: ScanEntry[], onProgress?: (done: numb
   let totalBytes = 0;
   const warnings: string[] = [];
   const files: FileReport[] = [];
+  const normalizedPaths = new Map<string, string>();
+  let cacheHits = 0;
+  let cacheMisses = 0;
   for (let index = 0; index < selected.length; index++) {
     const entry = selected[index];
     const path = entry.name;
+    const normalizedPath = path.normalize("NFKC").toLowerCase();
+    const collision = normalizedPaths.get(normalizedPath);
+    if (collision && collision !== path) warnings.push(`Path normalization collision: ${collision} and ${path}`);
+    normalizedPaths.set(normalizedPath, path);
+    if (entry.unsafeReason) {
+      files.push({ path, extension: extension(path), mime: "unknown", signature: "not read", size: 0, status: "unsafe", reason: entry.unsafeReason });
+      warnings.push(`Rejected unsafe entry: ${path}`);
+      onProgress?.(index + 1, selected.length);
+      continue;
+    }
     if (!safeZipPath(path)) {
       files.push({ path, extension: extension(path), mime: "unknown", signature: "not read", size: 0, status: "unsafe", reason: "Path traversal or absolute path rejected." });
       warnings.push(`Rejected unsafe path: ${path}`);
@@ -93,14 +116,24 @@ export async function scanEntries(entries: ScanEntry[], onProgress?: (done: numb
     const sig = signature(bytes);
     const isText = TEXT_EXTENSIONS.has(ext) || (!BINARY_SIGNATURES.has(sig) && looksLikeText(bytes));
     const sha256 = await hash(bytes);
+    const cacheKey = `${path}:${bytes.byteLength}:${sha256 ?? "no-hash"}`;
+    const cached = options.cache?.get(cacheKey);
+    if (cached) {
+      files.push({ ...cached, cache: "hit" });
+      cacheHits++;
+      onProgress?.(index + 1, selected.length);
+      continue;
+    }
+    cacheMisses++;
     let text: string | undefined;
     if (isText && bytes.length <= 2 * 1024 * 1024) text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     const status = text !== undefined ? "included" : "preserved";
     files.push({
-      path, extension: ext || "(none)", mime, signature: sig, size: bytes.byteLength, sha256, status,
+      path, extension: ext || "(none)", mime, signature: sig, size: bytes.byteLength, sha256, status, metadata: metadata(bytes, sig), cache: "miss",
       reason: text !== undefined ? "Readable text included in Markdown." : "Binary or large file preserved outside Markdown.",
       text, preview: text ? text.slice(0, 240).replace(/\s+/g, " ") : undefined, hex: text ? undefined : hexPreview(bytes),
     });
+    if (sha256) options.cache?.set(cacheKey, files[files.length - 1]);
     onProgress?.(index + 1, selected.length);
   }
   const byHash = new Map<string, string[]>();
@@ -109,7 +142,7 @@ export async function scanEntries(entries: ScanEntry[], onProgress?: (done: numb
   }
   const duplicateGroups = [...byHash.values()].filter((paths) => paths.length > 1);
   if (duplicateGroups.length) warnings.push(`Found ${duplicateGroups.length} duplicate content group${duplicateGroups.length === 1 ? "" : "s"}.`);
-  return { files, warnings, totalBytes, duplicateGroups };
+  return { files, warnings, totalBytes, duplicateGroups, cache: { hits: cacheHits, misses: cacheMisses } };
 }
 
 export async function scanZip(file: Blob, onProgress?: (done: number, total: number) => void, options: ScanOptions = {}): Promise<ScanReport> {

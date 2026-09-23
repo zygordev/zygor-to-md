@@ -47,13 +47,37 @@ function packageFacts(report: ScanReport): { runCommands: ProjectFact[]; depende
 
 function importEdges(report: ScanReport): DependencyEdge[] {
   const edges: DependencyEdge[] = [];
+  const paths = new Set(report.files.map((file) => file.path));
+  const resolveImport = (from: string, target: string): string => {
+    if (!target.startsWith(".")) return `package:${target.split("/")[0]}`;
+    const base = from.split("/").slice(0, -1).join("/");
+    const candidate = `${base}/${target}`.replace(/\/\.\//g, "/").replace(/\/[^/]+\/\.\.\//g, "/");
+    for (const option of [candidate, `${candidate}.js`, `${candidate}.ts`, `${candidate}.tsx`, `${candidate}/index.js`, `${candidate}/index.ts`]) if (paths.has(option)) return option;
+    return `unresolved:${target}`;
+  };
   const pattern = /(?:import(?:\s+[^"']+?\s+from\s*|\s*)|require\s*\(\s*|from\s+)["']([^"']+)["']/g;
   for (const file of textFiles(report)) {
     for (const [index, line] of (file.text ?? "").split(/\r?\n/).entries()) {
-      for (const match of line.matchAll(pattern)) edges.push({ from: file.path, to: match[1], evidence: evidence(file, index + 1, line) });
+      for (const match of line.matchAll(pattern)) edges.push({ from: file.path, to: resolveImport(file.path, match[1]), evidence: evidence(file, index + 1, line) });
     }
   }
   return edges;
+}
+
+function secretFacts(report: ScanReport): ProjectFact[] {
+  const result: ProjectFact[] = [];
+  const pattern = /(?:AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:password|secret|token|api[_-]?key)\s*[:=]\s*["']([^"']+)["'])/i;
+  for (const file of textFiles(report)) {
+    const ignored = /(?:example|sample|fixture|test|mock|docs?)/i.test(file.path);
+    for (const [index, line] of (file.text ?? "").split(/\r?\n/).entries()) {
+      const match = pattern.exec(line);
+      pattern.lastIndex = 0;
+      const value = match?.[1];
+      const highConfidence = Boolean(match && !ignored && (line.includes("PRIVATE KEY") || /^AKIA/.test(line.trim()) || (value && value.length >= 20 && !/^(changeme|example|test|dummy)/i.test(value))));
+      if (match && (!ignored || highConfidence)) result.push({ label: "Potential secret", value: line.replace(/([:=]\s*["']?)[^\s"']+/g, "$1[REDACTED]"), confidence: highConfidence ? "high" : "low", evidence: [evidence(file, index + 1, line)] });
+    }
+  }
+  return result;
 }
 
 function pathFacts(report: ScanReport, patterns: RegExp[], label: string, value: (file: FileReport) => string = (file) => file.path): ProjectFact[] {
@@ -76,7 +100,7 @@ export function analyzeProject(report: ScanReport): ProjectModel {
     vendored: pathFacts(report, [/node_modules\//i, /vendor\//i, /third_party\//i, /bower_components\//i], "Vendored dependency"),
     imports: importEdges(report),
     risks: [
-      ...facts(report, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:password|secret|token|api[_-]?key)\s*[:=]\s*["'][^"']+/i, () => "Potential secret", (file, line) => line.replace(/([:=]\s*["']?)[^\s"']+/g, "$1[REDACTED]")),
+      ...secretFacts(report),
       ...pathFacts(report, [/\.env(?:\.|$)/i, /id_rsa/i, /\.pem$/i], "Sensitive-looking file"),
       ...pathFacts(report, [/\.zip$/i, /\.tar(?:\.gz)?$/i, /\.jar$/i, /\.apk$/i], "Nested or opaque archive"),
     ],

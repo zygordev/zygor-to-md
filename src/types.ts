@@ -12,6 +12,8 @@ export interface FileReport {
   text?: string;
   preview?: string;
   hex?: string;
+  metadata?: Record<string, string | number | boolean>;
+  cache?: "hit" | "miss";
 }
 
 export interface Evidence {
@@ -25,6 +27,7 @@ export interface ProjectFact {
   label: string;
   value: string;
   evidence: Evidence[];
+  confidence?: "low" | "medium" | "high";
 }
 
 export interface DependencyEdge {
@@ -55,4 +58,5 @@ export interface ScanReport {
   warnings: string[];
   totalBytes: number;
   duplicateGroups: string[][];
+  cache?: { hits: number; misses: number };
 }

@@ -23,6 +23,7 @@ describe("project model", () => {
     expect(model.runCommands.find((fact) => fact.label === "npm start")?.evidence[0].startLine).toBe(2);
     expect(model.publicApis[0].evidence[0].path).toBe("src/server.js");
     expect(model.risks.some((fact) => fact.value === ".env")).toBe(true);
+    expect(model.imports[0].to).toBe("unresolved:./app.js");
   });
 
   it("emits portable intelligence formats from the same model", () => {

@@ -9737,9 +9737,9 @@ var require_load = __commonJS({
 var require_lib3 = __commonJS({
   "node_modules/jszip/lib/index.js"(exports, module) {
     "use strict";
-    function JSZip2() {
-      if (!(this instanceof JSZip2)) {
-        return new JSZip2();
+    function JSZip3() {
+      if (!(this instanceof JSZip3)) {
+        return new JSZip3();
       }
       if (arguments.length) {
         throw new Error("The constructor with parameters has been removed in JSZip 3.0, please check the upgrade guide.");
@@ -9748,7 +9748,7 @@ var require_lib3 = __commonJS({
       this.comment = null;
       this.root = "";
       this.clone = function() {
-        var newObj = new JSZip2();
+        var newObj = new JSZip3();
         for (var i in this) {
           if (typeof this[i] !== "function") {
             newObj[i] = this[i];
@@ -9757,16 +9757,16 @@ var require_lib3 = __commonJS({
         return newObj;
       };
     }
-    JSZip2.prototype = require_object();
-    JSZip2.prototype.loadAsync = require_load();
-    JSZip2.support = require_support();
-    JSZip2.defaults = require_defaults();
-    JSZip2.version = "3.10.2";
-    JSZip2.loadAsync = function(content, options) {
-      return new JSZip2().loadAsync(content, options);
+    JSZip3.prototype = require_object();
+    JSZip3.prototype.loadAsync = require_load();
+    JSZip3.support = require_support();
+    JSZip3.defaults = require_defaults();
+    JSZip3.version = "3.10.2";
+    JSZip3.loadAsync = function(content, options) {
+      return new JSZip3().loadAsync(content, options);
     };
-    JSZip2.external = require_external();
-    module.exports = JSZip2;
+    JSZip3.external = require_external();
+    module.exports = JSZip3;
   }
 });
 
@@ -9823,6 +9823,13 @@ async function hash(bytes) {
 function hexPreview(bytes) {
   return [...bytes.slice(0, 48)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
+function metadata(bytes, sig) {
+  if (sig === "PNG" && bytes.length >= 24) return { width: bytes[16] << 24 | bytes[17] << 16 | bytes[18] << 8 | bytes[19], height: bytes[20] << 24 | bytes[21] << 16 | bytes[22] << 8 | bytes[23], colorType: bytes[25] };
+  if (sig === "JPEG") return { format: "JPEG", hasExif: new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 256))).includes("Exif") };
+  if (sig === "PDF") return { pages: (new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 2 * 1024 * 1024))).match(/\/Type\s*\/Page\b/g) ?? []).length };
+  if (sig === "ZIP/PK") return { archive: true };
+  return void 0;
+}
 function looksLikeText(bytes) {
   if (!bytes.length) return true;
   const sample = bytes.slice(0, 512);
@@ -9844,9 +9851,22 @@ async function scanEntries(entries, onProgress, options = {}) {
   let totalBytes = 0;
   const warnings = [];
   const files = [];
+  const normalizedPaths = /* @__PURE__ */ new Map();
+  let cacheHits = 0;
+  let cacheMisses = 0;
   for (let index = 0; index < selected.length; index++) {
     const entry = selected[index];
     const path = entry.name;
+    const normalizedPath = path.normalize("NFKC").toLowerCase();
+    const collision = normalizedPaths.get(normalizedPath);
+    if (collision && collision !== path) warnings.push(`Path normalization collision: ${collision} and ${path}`);
+    normalizedPaths.set(normalizedPath, path);
+    if (entry.unsafeReason) {
+      files.push({ path, extension: extension(path), mime: "unknown", signature: "not read", size: 0, status: "unsafe", reason: entry.unsafeReason });
+      warnings.push(`Rejected unsafe entry: ${path}`);
+      onProgress?.(index + 1, selected.length);
+      continue;
+    }
     if (!safeZipPath(path)) {
       files.push({ path, extension: extension(path), mime: "unknown", signature: "not read", size: 0, status: "unsafe", reason: "Path traversal or absolute path rejected." });
       warnings.push(`Rejected unsafe path: ${path}`);
@@ -9861,9 +9881,18 @@ async function scanEntries(entries, onProgress, options = {}) {
     const sig = signature(bytes);
     const isText = TEXT_EXTENSIONS.has(ext) || !BINARY_SIGNATURES.has(sig) && looksLikeText(bytes);
     const sha256 = await hash(bytes);
-    let text;
-    if (isText && bytes.length <= 2 * 1024 * 1024) text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    const status = text !== void 0 ? "included" : "preserved";
+    const cacheKey = `${path}:${bytes.byteLength}:${sha256 ?? "no-hash"}`;
+    const cached = options.cache?.get(cacheKey);
+    if (cached) {
+      files.push({ ...cached, cache: "hit" });
+      cacheHits++;
+      onProgress?.(index + 1, selected.length);
+      continue;
+    }
+    cacheMisses++;
+    let text2;
+    if (isText && bytes.length <= 2 * 1024 * 1024) text2 = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    const status = text2 !== void 0 ? "included" : "preserved";
     files.push({
       path,
       extension: ext || "(none)",
@@ -9872,11 +9901,14 @@ async function scanEntries(entries, onProgress, options = {}) {
       size: bytes.byteLength,
       sha256,
       status,
-      reason: text !== void 0 ? "Readable text included in Markdown." : "Binary or large file preserved outside Markdown.",
-      text,
-      preview: text ? text.slice(0, 240).replace(/\s+/g, " ") : void 0,
-      hex: text ? void 0 : hexPreview(bytes)
+      metadata: metadata(bytes, sig),
+      cache: "miss",
+      reason: text2 !== void 0 ? "Readable text included in Markdown." : "Binary or large file preserved outside Markdown.",
+      text: text2,
+      preview: text2 ? text2.slice(0, 240).replace(/\s+/g, " ") : void 0,
+      hex: text2 ? void 0 : hexPreview(bytes)
     });
+    if (sha256) options.cache?.set(cacheKey, files[files.length - 1]);
     onProgress?.(index + 1, selected.length);
   }
   const byHash = /* @__PURE__ */ new Map();
@@ -9885,10 +9917,47 @@ async function scanEntries(entries, onProgress, options = {}) {
   }
   const duplicateGroups = [...byHash.values()].filter((paths) => paths.length > 1);
   if (duplicateGroups.length) warnings.push(`Found ${duplicateGroups.length} duplicate content group${duplicateGroups.length === 1 ? "" : "s"}.`);
-  return { files, warnings, totalBytes, duplicateGroups };
+  return { files, warnings, totalBytes, duplicateGroups, cache: { hits: cacheHits, misses: cacheMisses } };
 }
-async function scanZip(file, onProgress, options = {}) {
-  const zip = await import_jszip.default.loadAsync(file);
+
+// src/sources.ts
+var import_jszip2 = __toESM(require_lib3(), 1);
+function text(bytes, start, length) {
+  return new TextDecoder().decode(bytes.slice(start, start + length)).replace(/\0.*$/, "");
+}
+function octal(bytes, start, length) {
+  const value = text(bytes, start, length).trim();
+  return value ? Number.parseInt(value, 8) : 0;
+}
+function tarEntries(bytes) {
+  const entries = [];
+  let offset = 0;
+  while (offset + 512 <= bytes.length) {
+    const name = text(bytes, offset, 100);
+    if (!name) break;
+    const size2 = octal(bytes, offset + 124, 12);
+    const type = bytes[offset + 156];
+    const dataStart = offset + 512;
+    const dataEnd = dataStart + size2;
+    if (dataEnd > bytes.length) throw new Error(`TAR entry exceeds archive bounds: ${name}`);
+    if (type === 0 || type === 48) entries.push({ name, read: async () => bytes.slice(dataStart, dataEnd) });
+    else if (type === 53) entries.push({ name, dir: true, read: async () => new Uint8Array() });
+    else entries.push({ name, read: async () => new Uint8Array(), dir: false, unsafeReason: "Symbolic links and special TAR entries are not read." });
+    offset = dataStart + Math.ceil(size2 / 512) * 512;
+  }
+  return entries;
+}
+async function gunzip(bytes) {
+  if (typeof DecompressionStream === "undefined") throw new Error("TAR.GZ requires a runtime with DecompressionStream support.");
+  const stream = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function scanArchive(file, onProgress, options = {}, sourceName = file.name ?? "") {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const name = sourceName.toLowerCase();
+  if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) return scanEntries(tarEntries(await gunzip(bytes)), onProgress, options);
+  if (name.endsWith(".tar")) return scanEntries(tarEntries(bytes), onProgress, options);
+  const zip = await import_jszip2.default.loadAsync(bytes);
   return scanEntries(Object.values(zip.files).map((entry) => ({ name: entry.name, dir: entry.dir, read: () => entry.async("uint8array") })), onProgress, options);
 }
 
@@ -9933,13 +10002,36 @@ function packageFacts(report) {
 }
 function importEdges(report) {
   const edges = [];
+  const paths = new Set(report.files.map((file) => file.path));
+  const resolveImport = (from, target) => {
+    if (!target.startsWith(".")) return `package:${target.split("/")[0]}`;
+    const base = from.split("/").slice(0, -1).join("/");
+    const candidate = `${base}/${target}`.replace(/\/\.\//g, "/").replace(/\/[^/]+\/\.\.\//g, "/");
+    for (const option of [candidate, `${candidate}.js`, `${candidate}.ts`, `${candidate}.tsx`, `${candidate}/index.js`, `${candidate}/index.ts`]) if (paths.has(option)) return option;
+    return `unresolved:${target}`;
+  };
   const pattern = /(?:import(?:\s+[^"']+?\s+from\s*|\s*)|require\s*\(\s*|from\s+)["']([^"']+)["']/g;
   for (const file of textFiles(report)) {
     for (const [index, line] of (file.text ?? "").split(/\r?\n/).entries()) {
-      for (const match of line.matchAll(pattern)) edges.push({ from: file.path, to: match[1], evidence: evidence(file, index + 1, line) });
+      for (const match of line.matchAll(pattern)) edges.push({ from: file.path, to: resolveImport(file.path, match[1]), evidence: evidence(file, index + 1, line) });
     }
   }
   return edges;
+}
+function secretFacts(report) {
+  const result = [];
+  const pattern = /(?:AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:password|secret|token|api[_-]?key)\s*[:=]\s*["']([^"']+)["'])/i;
+  for (const file of textFiles(report)) {
+    const ignored = /(?:example|sample|fixture|test|mock|docs?)/i.test(file.path);
+    for (const [index, line] of (file.text ?? "").split(/\r?\n/).entries()) {
+      const match = pattern.exec(line);
+      pattern.lastIndex = 0;
+      const value = match?.[1];
+      const highConfidence = Boolean(match && !ignored && (line.includes("PRIVATE KEY") || /^AKIA/.test(line.trim()) || value && value.length >= 20 && !/^(changeme|example|test|dummy)/i.test(value)));
+      if (match && (!ignored || highConfidence)) result.push({ label: "Potential secret", value: line.replace(/([:=]\s*["']?)[^\s"']+/g, "$1[REDACTED]"), confidence: highConfidence ? "high" : "low", evidence: [evidence(file, index + 1, line)] });
+    }
+  }
+  return result;
 }
 function pathFacts(report, patterns, label, value = (file) => file.path) {
   return report.files.filter((file) => patterns.some((pattern) => pattern.test(file.path))).map((file) => ({ label, value: value(file), evidence: [evidence(file, 1, file.path)] }));
@@ -9960,7 +10052,7 @@ function analyzeProject(report) {
     vendored: pathFacts(report, [/node_modules\//i, /vendor\//i, /third_party\//i, /bower_components\//i], "Vendored dependency"),
     imports: importEdges(report),
     risks: [
-      ...facts(report, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:password|secret|token|api[_-]?key)\s*[:=]\s*["'][^"']+/i, () => "Potential secret", (file, line) => line.replace(/([:=]\s*["']?)[^\s"']+/g, "$1[REDACTED]")),
+      ...secretFacts(report),
       ...pathFacts(report, [/\.env(?:\.|$)/i, /id_rsa/i, /\.pem$/i], "Sensitive-looking file"),
       ...pathFacts(report, [/\.zip$/i, /\.tar(?:\.gz)?$/i, /\.jar$/i, /\.apk$/i], "Nested or opaque archive")
     ],
@@ -9989,7 +10081,7 @@ function size(bytes) {
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
-function metadata(file) {
+function metadata2(file) {
   return [`- **Path:** \`${file.path}\``, `- **Extension:** \`${file.extension}\``, `- **MIME:** \`${file.mime}\``, `- **Signature:** \`${file.signature}\``, `- **Size:** ${size(file.size)}`, `- **SHA-256:** \`${file.sha256 ?? "unavailable"}\``, `- **Status:** ${file.status} \u2014 ${file.reason}`].join("\n");
 }
 function renderFile(file, template) {
@@ -9998,7 +10090,7 @@ ${file.text.replaceAll("```", "``\\`")}
 \`\`\`` : `> Preview: ${file.preview ?? "none"}
 >
 > Hex: \`${file.hex ?? "unavailable"}\``;
-  return template.replaceAll("{{path}}", file.path).replaceAll("{{metadata}}", metadata(file)).replaceAll("{{content}}", content);
+  return template.replaceAll("{{path}}", file.path).replaceAll("{{metadata}}", metadata2(file)).replaceAll("{{content}}", content);
 }
 function anchor(path) {
   return path.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -10170,6 +10262,7 @@ async function main() {
   const changedOnly = input("changed-only").toLowerCase() === "true";
   const failOnWarning = input("fail-on-warning").toLowerCase() === "true";
   const failOnSecret = input("fail-on-secret").toLowerCase() === "true";
+  const prComment = input("pr-comment").toLowerCase() === "true";
   const writeOutput = async (path, content) => {
     await mkdir(dirname(resolve(path)), { recursive: true });
     await writeFile(resolve(path), content, "utf8");
@@ -10199,11 +10292,11 @@ async function main() {
     }
     report = await scanEntries(entries, void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
   } else {
-    report = await scanZip(new Blob([await readFile(inputPath)]), void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
+    report = await scanArchive(new Blob([await readFile(inputPath)]), void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes }, inputPath);
   }
   const markdown = generateProjectGuide(report, style, template, instruction);
   const model = analyzeProject(report);
-  if (failOnSecret && model.risks.some((risk) => risk.label === "Potential secret")) throw new Error("Potential secret detected; fail-on-secret is enabled.");
+  if (failOnSecret && model.risks.some((risk) => risk.label === "Potential secret" && risk.confidence === "high")) throw new Error("High-confidence secret detected; fail-on-secret is enabled.");
   if (failOnWarning && report.warnings.length) throw new Error("Scan warnings detected; fail-on-warning is enabled.");
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, markdown, "utf8");
@@ -10228,13 +10321,37 @@ async function main() {
   if (htmlPath) await writeOutput(htmlPath, generateHtml(report, style, template, instruction));
   const mermaidPath = input("mermaid");
   if (mermaidPath) await writeOutput(mermaidPath, generateMermaid(report));
-  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Zygor-to-MD
+  let changedSummary = "";
+  if (input("changed-report")) {
+    try {
+      const { stdout } = await execFileAsync("git", ["diff", "--name-status", "HEAD^", "HEAD"], { cwd: inputPath });
+      changedSummary = `
+## Changed files
+
+${stdout.trim() ? stdout.trim().split(/\r?\n/).map((line) => `- ${line}`).join("\n") : "No changed files detected."}
+`;
+      await writeOutput(input("changed-report"), changedSummary);
+    } catch {
+      changedSummary = "\n## Changed files\n\nGit change data was unavailable.\n";
+    }
+  }
+  const summary = `## Zygor-to-MD
 
 - Files scanned: ${report.files.length}
 - Readable files: ${report.files.filter((file) => file.status === "included").length}
 - Preserved files: ${report.files.filter((file) => file.status !== "included").length}
 - Warnings: ${report.warnings.length}
-`);
+${changedSummary}`;
+  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, summary);
+  if (prComment && process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY && process.env.GITHUB_EVENT_PATH) {
+    try {
+      const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
+      const number = event.pull_request?.number;
+      if (number) await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/issues/${number}/comments`, { method: "POST", headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" }, body: JSON.stringify({ body: summary }) });
+    } catch {
+      console.warn("Could not publish the optional GitHub PR comment.");
+    }
+  }
 }
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);

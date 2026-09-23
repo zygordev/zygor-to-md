@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdir, stat, readdir, appendFile } from "node:fs/p
 import { dirname, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { scanEntries, scanZip, type ScanEntry } from "./zip";
+import { scanEntries, type ScanEntry } from "./zip";
+import { scanArchive } from "./sources";
 import { defaultTemplate, generateManifest, type Style } from "./markdown";
 import { analyzeProject } from "./model";
 import { generateContextPack, generateHtml, generateLlms, generateMermaid, generateProjectGuide, generateSarif } from "./project-outputs";
@@ -29,6 +30,7 @@ async function main() {
   const changedOnly = input("changed-only").toLowerCase() === "true";
   const failOnWarning = input("fail-on-warning").toLowerCase() === "true";
   const failOnSecret = input("fail-on-secret").toLowerCase() === "true";
+  const prComment = input("pr-comment").toLowerCase() === "true";
   const writeOutput = async (path: string, content: string) => { await mkdir(dirname(resolve(path)), { recursive: true }); await writeFile(resolve(path), content, "utf8"); };
   const inputStat = await stat(inputPath);
   let report;
@@ -55,11 +57,11 @@ async function main() {
     }
     report = await scanEntries(entries, undefined, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
   } else {
-    report = await scanZip(new Blob([await readFile(inputPath)]), undefined, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
+    report = await scanArchive(new Blob([await readFile(inputPath)]), undefined, { exclude, maxFiles, maxUncompressedBytes: maxBytes }, inputPath);
   }
   const markdown = generateProjectGuide(report, style, template, instruction);
   const model = analyzeProject(report);
-  if (failOnSecret && model.risks.some((risk) => risk.label === "Potential secret")) throw new Error("Potential secret detected; fail-on-secret is enabled.");
+  if (failOnSecret && model.risks.some((risk) => risk.label === "Potential secret" && risk.confidence === "high")) throw new Error("High-confidence secret detected; fail-on-secret is enabled.");
   if (failOnWarning && report.warnings.length) throw new Error("Scan warnings detected; fail-on-warning is enabled.");
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, markdown, "utf8");
@@ -84,7 +86,23 @@ async function main() {
   if (htmlPath) await writeOutput(htmlPath, generateHtml(report, style, template, instruction));
   const mermaidPath = input("mermaid");
   if (mermaidPath) await writeOutput(mermaidPath, generateMermaid(report));
-  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Zygor-to-MD\n\n- Files scanned: ${report.files.length}\n- Readable files: ${report.files.filter((file) => file.status === "included").length}\n- Preserved files: ${report.files.filter((file) => file.status !== "included").length}\n- Warnings: ${report.warnings.length}\n`);
+  let changedSummary = "";
+  if (input("changed-report")) {
+    try {
+      const { stdout } = await execFileAsync("git", ["diff", "--name-status", "HEAD^", "HEAD"], { cwd: inputPath });
+      changedSummary = `\n## Changed files\n\n${stdout.trim() ? stdout.trim().split(/\r?\n/).map((line) => `- ${line}`).join("\n") : "No changed files detected."}\n`;
+      await writeOutput(input("changed-report"), changedSummary);
+    } catch { changedSummary = "\n## Changed files\n\nGit change data was unavailable.\n"; }
+  }
+  const summary = `## Zygor-to-MD\n\n- Files scanned: ${report.files.length}\n- Readable files: ${report.files.filter((file) => file.status === "included").length}\n- Preserved files: ${report.files.filter((file) => file.status !== "included").length}\n- Warnings: ${report.warnings.length}\n${changedSummary}`;
+  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, summary);
+  if (prComment && process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY && process.env.GITHUB_EVENT_PATH) {
+    try {
+      const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8")) as { pull_request?: { number?: number } };
+      const number = event.pull_request?.number;
+      if (number) await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/issues/${number}/comments`, { method: "POST", headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" }, body: JSON.stringify({ body: summary }) });
+    } catch { console.warn("Could not publish the optional GitHub PR comment."); }
+  }
 }
 
 main().catch((error) => {
