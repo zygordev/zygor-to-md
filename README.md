@@ -11,6 +11,13 @@ npm run dev
 
 Run the focused checks with `npm test` and create a production build with `npm run build`.
 
+## Try it online
+
+The browser app is deployed as a static GitHub Pages site at
+[`https://zygordev.github.io/zygor-to-md/`](https://zygordev.github.io/zygor-to-md/).
+It works from desktop and mobile browsers. Archives and folders are processed
+locally in the browser; the hosted site receives no project files.
+
 ## GitHub Actions
 
 The repository is also a reusable composite action. It accepts either a ZIP archive or a checked-out directory, and runs entirely on the GitHub-hosted runner:
