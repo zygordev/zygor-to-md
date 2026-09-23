@@ -16,6 +16,12 @@ export interface ScanOptions {
   exclude?: string[];
 }
 
+export interface ScanEntry {
+  name: string;
+  dir?: boolean;
+  read: () => Promise<Uint8Array>;
+}
+
 export function safeZipPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
   return !normalized.startsWith("/") && !/^[a-zA-Z]:/.test(normalized) &&
@@ -61,26 +67,25 @@ function matchesExclude(path: string, patterns: string[]): boolean {
   });
 }
 
-export async function scanZip(file: Blob, onProgress?: (done: number, total: number) => void, options: ScanOptions = {}): Promise<ScanReport> {
-  const zip = await JSZip.loadAsync(file);
+export async function scanEntries(entries: ScanEntry[], onProgress?: (done: number, total: number) => void, options: ScanOptions = {}): Promise<ScanReport> {
   const maxFiles = options.maxFiles ?? MAX_FILES;
   const maxBytes = options.maxUncompressedBytes ?? MAX_UNCOMPRESSED_BYTES;
   const excluded = options.exclude ?? [];
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir && !matchesExclude(entry.name, excluded));
-  if (entries.length > maxFiles) throw new Error(`ZIP contains ${entries.length.toLocaleString()} files after exclusions; the limit is ${maxFiles.toLocaleString()}.`);
+  const selected = entries.filter((entry) => !entry.dir && !matchesExclude(entry.name, excluded));
+  if (selected.length > maxFiles) throw new Error(`Input contains ${selected.length.toLocaleString()} files after exclusions; the limit is ${maxFiles.toLocaleString()}.`);
   let totalBytes = 0;
   const warnings: string[] = [];
   const files: FileReport[] = [];
-  for (let index = 0; index < entries.length; index++) {
-    const entry = entries[index];
+  for (let index = 0; index < selected.length; index++) {
+    const entry = selected[index];
     const path = entry.name;
     if (!safeZipPath(path)) {
       files.push({ path, extension: extension(path), mime: "unknown", signature: "not read", size: 0, status: "unsafe", reason: "Path traversal or absolute path rejected." });
       warnings.push(`Rejected unsafe path: ${path}`);
-      onProgress?.(index + 1, entries.length);
+      onProgress?.(index + 1, selected.length);
       continue;
     }
-    const bytes = await entry.async("uint8array");
+    const bytes = await entry.read();
     totalBytes += bytes.byteLength;
     if (totalBytes > maxBytes) throw new Error(`Uncompressed ZIP content exceeds ${maxBytes / 1024 / 1024} MB.`);
     const ext = extension(path);
@@ -96,7 +101,7 @@ export async function scanZip(file: Blob, onProgress?: (done: number, total: num
       reason: text !== undefined ? "Readable text included in Markdown." : "Binary or large file preserved outside Markdown.",
       text, preview: text ? text.slice(0, 240).replace(/\s+/g, " ") : undefined, hex: text ? undefined : hexPreview(bytes),
     });
-    onProgress?.(index + 1, entries.length);
+    onProgress?.(index + 1, selected.length);
   }
   const byHash = new Map<string, string[]>();
   for (const file of files) {
@@ -105,4 +110,9 @@ export async function scanZip(file: Blob, onProgress?: (done: number, total: num
   const duplicateGroups = [...byHash.values()].filter((paths) => paths.length > 1);
   if (duplicateGroups.length) warnings.push(`Found ${duplicateGroups.length} duplicate content group${duplicateGroups.length === 1 ? "" : "s"}.`);
   return { files, warnings, totalBytes, duplicateGroups };
+}
+
+export async function scanZip(file: Blob, onProgress?: (done: number, total: number) => void, options: ScanOptions = {}): Promise<ScanReport> {
+  const zip = await JSZip.loadAsync(file);
+  return scanEntries(Object.values(zip.files).map((entry) => ({ name: entry.name, dir: entry.dir, read: () => entry.async("uint8array") })), onProgress, options);
 }

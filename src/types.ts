@@ -14,6 +14,42 @@ export interface FileReport {
   hex?: string;
 }
 
+export interface Evidence {
+  path: string;
+  startLine: number;
+  endLine: number;
+  excerpt: string;
+}
+
+export interface ProjectFact {
+  label: string;
+  value: string;
+  evidence: Evidence[];
+}
+
+export interface DependencyEdge {
+  from: string;
+  to: string;
+  evidence: Evidence;
+}
+
+export interface ProjectModel {
+  manifests: ProjectFact[];
+  dependencies: ProjectFact[];
+  runCommands: ProjectFact[];
+  entryPoints: ProjectFact[];
+  publicApis: ProjectFact[];
+  configuration: ProjectFact[];
+  infrastructure: ProjectFact[];
+  databases: ProjectFact[];
+  tests: ProjectFact[];
+  generated: ProjectFact[];
+  vendored: ProjectFact[];
+  imports: DependencyEdge[];
+  risks: ProjectFact[];
+  recommendations: ProjectFact[];
+}
+
 export interface ScanReport {
   files: FileReport[];
   warnings: string[];

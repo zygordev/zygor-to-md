@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import "./style.css";
-import { generateMarkdown, defaultTemplate, type Style } from "./markdown";
+import { defaultTemplate, type Style } from "./markdown";
+import { generateContextPack, generateHtml, generateLlms, generateMermaid, generateProjectGuide, generateSarif } from "./project-outputs";
 import { scanZip } from "./zip";
 import type { ScanReport } from "./types";
 
@@ -64,7 +65,7 @@ function render() {
   $("#progress").classList.add("hidden"); $("#results").classList.remove("hidden");
   const title = originalZip?.name.replace(/\.zip$/i, "") ?? "Project"; $("#resultTitle").textContent = title;
   $("#stats").innerHTML = `<div><strong>${report.files.length}</strong><span>files scanned</span></div><div><strong>${report.files.filter((f) => f.status === "included").length}</strong><span>in Markdown</span></div><div><strong>${report.files.filter((f) => f.status !== "included").length}</strong><span>preserved</span></div><div><strong>${(report.totalBytes / 1024 / 1024).toFixed(1)} MB</strong><span>unpacked</span></div>`;
-  markdown = generateMarkdown(report, ($("#style") as HTMLSelectElement).value as Style, ($("#template") as HTMLTextAreaElement).value, ($("#instruction") as HTMLInputElement).value);
+  markdown = generateProjectGuide(report, ($("#style") as HTMLSelectElement).value as Style, ($("#template") as HTMLTextAreaElement).value, ($("#instruction") as HTMLInputElement).value);
   ($("#preview") as HTMLTextAreaElement).value = markdown; renderTree();
 }
 function renderTree() { if (!report) return; const needle = filter.toLowerCase(); $("#fileTree").innerHTML = report.files.filter((f) => f.path.toLowerCase().includes(needle)).map((f) => `<div class="file-row"><span class="file-status ${f.status}"></span><span class="file-name">${f.path}</span><span class="file-size">${f.size.toLocaleString()} B</span></div>`).join(""); }
@@ -75,4 +76,4 @@ function download(blob: Blob, name: string) { const url = URL.createObjectURL(bl
 $("#downloadMd").addEventListener("click", () => download(new Blob([markdown], { type: "text/markdown" }), "project-overview.md"));
 $("#downloadOriginal").addEventListener("click", () => { if (originalZip) download(originalZip, originalZip.name); });
 $("#copy").addEventListener("click", async () => { await navigator.clipboard.writeText(markdown); ($("#copy") as HTMLButtonElement).textContent = "Copied"; setTimeout(() => ($("#copy") as HTMLButtonElement).textContent = "Copy", 1200); });
-$("#downloadPackage").addEventListener("click", async () => { if (!originalZip || !report) return; const zip = new JSZip(); zip.file(originalZip.name, originalZip); zip.file("project-overview.md", markdown); zip.file("manifest.json", JSON.stringify({ generatedAt: new Date().toISOString(), source: originalZip.name, files: report.files }, null, 2)); download(await zip.generateAsync({ type: "blob" }), "zygor-to-md-package.zip"); });
+$("#downloadPackage").addEventListener("click", async () => { if (!originalZip || !report) return; const zip = new JSZip(); const style = ($("#style") as HTMLSelectElement).value as Style; const template = ($("#template") as HTMLTextAreaElement).value; const instruction = ($("#instruction") as HTMLInputElement).value; zip.file(originalZip.name, originalZip); zip.file("project-overview.md", markdown); zip.file("llms.txt", generateLlms(report)); zip.file("context-pack.json", generateContextPack(report)); zip.file("project.sarif", generateSarif(report)); zip.file("dependency-graph.mmd", generateMermaid(report)); zip.file("project.html", generateHtml(report, style, template, instruction)); zip.file("manifest.json", JSON.stringify({ generatedAt: new Date().toISOString(), source: originalZip.name, files: report.files }, null, 2)); download(await zip.generateAsync({ type: "blob" }), "zygor-to-md-package.zip"); });

@@ -1,4 +1,5 @@
 import type { FileReport, ScanReport } from "./types";
+import { analyzeProject } from "./model";
 
 export type Style = "field-notes" | "catalog" | "compact";
 export const defaultTemplate = `## {{path}}\n\n{{metadata}}\n\n{{content}}`;
@@ -38,6 +39,7 @@ export function generateManifest(report: ScanReport): string {
     files: report.files,
     duplicateGroups: report.duplicateGroups,
     warnings: report.warnings,
+    projectModel: analyzeProject(report),
   }, null, 2);
 }
 

@@ -28,6 +28,21 @@ inputs:
   manifest:
     description: Optional machine-readable manifest JSON output path.
     required: false
+  llms:
+    description: Optional llms.txt output path for coding agents.
+    required: false
+  context-pack:
+    description: Optional JSON context pack output path.
+    required: false
+  sarif:
+    description: Optional SARIF security and policy output path.
+    required: false
+  html:
+    description: Optional static HTML documentation output path.
+    required: false
+  mermaid:
+    description: Optional Mermaid dependency graph output path.
+    required: false
   exclude:
     description: Comma-separated glob patterns to omit, for example node_modules/**,.git/**,*.map.
     required: false
@@ -39,6 +54,18 @@ inputs:
     description: Maximum uncompressed content to scan in megabytes.
     required: false
     default: "100"
+  changed-only:
+    description: For directory inputs, scan only files changed between HEAD^ and HEAD.
+    required: false
+    default: "false"
+  fail-on-warning:
+    description: Fail the action when the scanner emits warnings.
+    required: false
+    default: "false"
+  fail-on-secret:
+    description: Fail the action when a likely secret is detected.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -51,7 +78,15 @@ runs:
         INPUT_INSTRUCTION: ${{ inputs.instruction }}
         INPUT_SUMMARY: ${{ inputs.summary }}
         INPUT_MANIFEST: ${{ inputs.manifest }}
+        INPUT_LLMS: ${{ inputs.llms }}
+        INPUT_CONTEXT_PACK: ${{ inputs.context-pack }}
+        INPUT_SARIF: ${{ inputs.sarif }}
+        INPUT_HTML: ${{ inputs.html }}
+        INPUT_MERMAID: ${{ inputs.mermaid }}
         INPUT_EXCLUDE: ${{ inputs.exclude }}
         INPUT_MAX_FILES: ${{ inputs.max-files }}
         INPUT_MAX_UNCOMPRESSED_MB: ${{ inputs.max-uncompressed-mb }}
+        INPUT_CHANGED_ONLY: ${{ inputs.changed-only }}
+        INPUT_FAIL_ON_WARNING: ${{ inputs.fail-on-warning }}
+        INPUT_FAIL_ON_SECRET: ${{ inputs.fail-on-secret }}
       run: node "$GITHUB_ACTION_PATH/dist/action.mjs"

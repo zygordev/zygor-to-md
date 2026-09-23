@@ -9737,9 +9737,9 @@ var require_load = __commonJS({
 var require_lib3 = __commonJS({
   "node_modules/jszip/lib/index.js"(exports, module) {
     "use strict";
-    function JSZip3() {
-      if (!(this instanceof JSZip3)) {
-        return new JSZip3();
+    function JSZip2() {
+      if (!(this instanceof JSZip2)) {
+        return new JSZip2();
       }
       if (arguments.length) {
         throw new Error("The constructor with parameters has been removed in JSZip 3.0, please check the upgrade guide.");
@@ -9748,7 +9748,7 @@ var require_lib3 = __commonJS({
       this.comment = null;
       this.root = "";
       this.clone = function() {
-        var newObj = new JSZip3();
+        var newObj = new JSZip2();
         for (var i in this) {
           if (typeof this[i] !== "function") {
             newObj[i] = this[i];
@@ -9757,23 +9757,24 @@ var require_lib3 = __commonJS({
         return newObj;
       };
     }
-    JSZip3.prototype = require_object();
-    JSZip3.prototype.loadAsync = require_load();
-    JSZip3.support = require_support();
-    JSZip3.defaults = require_defaults();
-    JSZip3.version = "3.10.2";
-    JSZip3.loadAsync = function(content, options) {
-      return new JSZip3().loadAsync(content, options);
+    JSZip2.prototype = require_object();
+    JSZip2.prototype.loadAsync = require_load();
+    JSZip2.support = require_support();
+    JSZip2.defaults = require_defaults();
+    JSZip2.version = "3.10.2";
+    JSZip2.loadAsync = function(content, options) {
+      return new JSZip2().loadAsync(content, options);
     };
-    JSZip3.external = require_external();
-    module.exports = JSZip3;
+    JSZip2.external = require_external();
+    module.exports = JSZip2;
   }
 });
 
 // src/action.ts
-var import_jszip2 = __toESM(require_lib3(), 1);
-import { readFile, writeFile, mkdir, stat, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat, readdir, appendFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 // src/zip.ts
 var import_jszip = __toESM(require_lib3(), 1);
@@ -9834,26 +9835,25 @@ function matchesExclude(path, patterns) {
     return new RegExp(`^${escaped}$`).test(path);
   });
 }
-async function scanZip(file, onProgress, options = {}) {
-  const zip = await import_jszip.default.loadAsync(file);
+async function scanEntries(entries, onProgress, options = {}) {
   const maxFiles = options.maxFiles ?? MAX_FILES;
   const maxBytes = options.maxUncompressedBytes ?? MAX_UNCOMPRESSED_BYTES;
   const excluded = options.exclude ?? [];
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir && !matchesExclude(entry.name, excluded));
-  if (entries.length > maxFiles) throw new Error(`ZIP contains ${entries.length.toLocaleString()} files after exclusions; the limit is ${maxFiles.toLocaleString()}.`);
+  const selected = entries.filter((entry) => !entry.dir && !matchesExclude(entry.name, excluded));
+  if (selected.length > maxFiles) throw new Error(`Input contains ${selected.length.toLocaleString()} files after exclusions; the limit is ${maxFiles.toLocaleString()}.`);
   let totalBytes = 0;
   const warnings = [];
   const files = [];
-  for (let index = 0; index < entries.length; index++) {
-    const entry = entries[index];
+  for (let index = 0; index < selected.length; index++) {
+    const entry = selected[index];
     const path = entry.name;
     if (!safeZipPath(path)) {
       files.push({ path, extension: extension(path), mime: "unknown", signature: "not read", size: 0, status: "unsafe", reason: "Path traversal or absolute path rejected." });
       warnings.push(`Rejected unsafe path: ${path}`);
-      onProgress?.(index + 1, entries.length);
+      onProgress?.(index + 1, selected.length);
       continue;
     }
-    const bytes = await entry.async("uint8array");
+    const bytes = await entry.read();
     totalBytes += bytes.byteLength;
     if (totalBytes > maxBytes) throw new Error(`Uncompressed ZIP content exceeds ${maxBytes / 1024 / 1024} MB.`);
     const ext = extension(path);
@@ -9877,15 +9877,101 @@ async function scanZip(file, onProgress, options = {}) {
       preview: text ? text.slice(0, 240).replace(/\s+/g, " ") : void 0,
       hex: text ? void 0 : hexPreview(bytes)
     });
-    onProgress?.(index + 1, entries.length);
+    onProgress?.(index + 1, selected.length);
   }
   const byHash = /* @__PURE__ */ new Map();
-  for (const file2 of files) {
-    if (file2.sha256) byHash.set(file2.sha256, [...byHash.get(file2.sha256) ?? [], file2.path]);
+  for (const file of files) {
+    if (file.sha256) byHash.set(file.sha256, [...byHash.get(file.sha256) ?? [], file.path]);
   }
   const duplicateGroups = [...byHash.values()].filter((paths) => paths.length > 1);
   if (duplicateGroups.length) warnings.push(`Found ${duplicateGroups.length} duplicate content group${duplicateGroups.length === 1 ? "" : "s"}.`);
   return { files, warnings, totalBytes, duplicateGroups };
+}
+async function scanZip(file, onProgress, options = {}) {
+  const zip = await import_jszip.default.loadAsync(file);
+  return scanEntries(Object.values(zip.files).map((entry) => ({ name: entry.name, dir: entry.dir, read: () => entry.async("uint8array") })), onProgress, options);
+}
+
+// src/model.ts
+var textFiles = (report) => report.files.filter((file) => file.text !== void 0);
+function evidence(file, line, excerpt) {
+  return { path: file.path, startLine: line, endLine: line, excerpt: excerpt.trim().slice(0, 240) };
+}
+function lineContaining(file, value) {
+  const line = (file.text ?? "").split(/\r?\n/).findIndex((candidate) => candidate.includes(value));
+  return line < 0 ? 1 : line + 1;
+}
+function facts(report, pattern, label, value) {
+  const result = [];
+  for (const file of textFiles(report)) {
+    for (const [index, line] of (file.text ?? "").split(/\r?\n/).entries()) {
+      if (pattern.test(line)) result.push({ label: label(file, line), value: value(file, line), evidence: [evidence(file, index + 1, line)] });
+      pattern.lastIndex = 0;
+    }
+  }
+  return result;
+}
+function manifestFacts(report) {
+  return report.files.filter((file) => ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "composer.json", "Gemfile", "requirements.txt"].some((name) => file.path.toLowerCase().endsWith(name.toLowerCase()))).map((file) => ({
+    label: "Package manifest",
+    value: file.path,
+    evidence: [evidence(file, 1, file.path)]
+  }));
+}
+function packageFacts(report) {
+  const result = [];
+  const dependencies = [];
+  for (const file of textFiles(report).filter((candidate) => candidate.path.endsWith("package.json"))) {
+    try {
+      const parsed = JSON.parse(file.text ?? "");
+      for (const [name, command] of Object.entries(parsed.scripts ?? {})) result.push({ label: `npm ${name}`, value: command, evidence: [evidence(file, lineContaining(file, `"${name}"`), `"${name}": "${command}"`)] });
+      for (const section2 of [parsed.dependencies ?? {}, parsed.devDependencies ?? {}]) for (const [name, version] of Object.entries(section2)) dependencies.push({ label: "Dependency", value: `${name}@${version}`, evidence: [evidence(file, lineContaining(file, `"${name}"`), name)] });
+    } catch {
+    }
+  }
+  return { runCommands: result, dependencies };
+}
+function importEdges(report) {
+  const edges = [];
+  const pattern = /(?:import(?:\s+[^"']+?\s+from\s*|\s*)|require\s*\(\s*|from\s+)["']([^"']+)["']/g;
+  for (const file of textFiles(report)) {
+    for (const [index, line] of (file.text ?? "").split(/\r?\n/).entries()) {
+      for (const match of line.matchAll(pattern)) edges.push({ from: file.path, to: match[1], evidence: evidence(file, index + 1, line) });
+    }
+  }
+  return edges;
+}
+function pathFacts(report, patterns, label, value = (file) => file.path) {
+  return report.files.filter((file) => patterns.some((pattern) => pattern.test(file.path))).map((file) => ({ label, value: value(file), evidence: [evidence(file, 1, file.path)] }));
+}
+function analyzeProject(report) {
+  const packageData = packageFacts(report);
+  const model = {
+    manifests: manifestFacts(report),
+    dependencies: packageData.dependencies,
+    runCommands: packageData.runCommands,
+    entryPoints: facts(report, /(?:main|entry|bin|if __name__|func main\s*\(|public static void main)/i, (file) => "Likely entry point", (file, line) => `${file.path}: ${line.trim()}`),
+    publicApis: facts(report, /\b(?:export\s+(?:default\s+)?(?:function|class|const|interface|type)|app\.(?:get|post|put|delete)|router\.(?:get|post|put|delete)|@(?:Get|Post|Put|Delete)Mapping)\b/i, () => "Public API", (file, line) => line.trim()),
+    configuration: facts(report, /(?:process\.env\.[A-Z][A-Z0-9_]*|os\.environ\[|getenv\(|\b[A-Z][A-Z0-9_]{2,}\s*=)/, () => "Configuration reference", (file, line) => line.trim()),
+    infrastructure: pathFacts(report, [/dockerfile/i, /docker-compose/i, /\.github\/workflows\//i, /\.gitlab-ci/i, /terraform\//i, /k8s|kubernetes/i, /deploy/i], "Infrastructure file"),
+    databases: pathFacts(report, [/schema/i, /migration/i, /\.sql$/i, /\.sqlite(?:3)?$/i, /prisma/i, /drizzle/i], "Database artifact"),
+    tests: [...facts(report, /(?:describe\s*\(|it\s*\(|test\s*\(|pytest|unittest|vitest|jest|mocha)/i, () => "Test signal", (file, line) => line.trim()), ...pathFacts(report, [/test[s]?\//i, /\.test\./i, /\.spec\./i], "Test file")],
+    generated: pathFacts(report, [/\/dist\//i, /\/build\//i, /\/coverage\//i, /\.min\.(?:js|css)$/i, /\.map$/i], "Likely generated file"),
+    vendored: pathFacts(report, [/node_modules\//i, /vendor\//i, /third_party\//i, /bower_components\//i], "Vendored dependency"),
+    imports: importEdges(report),
+    risks: [
+      ...facts(report, /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:password|secret|token|api[_-]?key)\s*[:=]\s*["'][^"']+/i, () => "Potential secret", (file, line) => line.replace(/([:=]\s*["']?)[^\s"']+/g, "$1[REDACTED]")),
+      ...pathFacts(report, [/\.env(?:\.|$)/i, /id_rsa/i, /\.pem$/i], "Sensitive-looking file"),
+      ...pathFacts(report, [/\.zip$/i, /\.tar(?:\.gz)?$/i, /\.jar$/i, /\.apk$/i], "Nested or opaque archive")
+    ],
+    recommendations: []
+  };
+  model.recommendations = [
+    ...model.manifests.length ? [] : [{ label: "No package manifest detected", value: "Add or document the project's dependency and run configuration.", evidence: [] }],
+    ...model.runCommands.length ? [] : [{ label: "No run command detected", value: "Document the canonical development and production commands.", evidence: [] }],
+    ...model.tests.length ? [] : [{ label: "No test signal detected", value: "Add a focused test command or document the existing test workflow.", evidence: [] }]
+  ];
+  return model;
 }
 
 // src/markdown.ts
@@ -9930,7 +10016,8 @@ function generateManifest(report) {
     },
     files: report.files,
     duplicateGroups: report.duplicateGroups,
-    warnings: report.warnings
+    warnings: report.warnings,
+    projectModel: analyzeProject(report)
   }, null, 2);
 }
 function generateMarkdown(report, style, template = defaultTemplate, instruction = "") {
@@ -9990,7 +10077,80 @@ ${bodyWithAnchors}${duplicates}${warnings}
 `;
 }
 
+// src/project-outputs.ts
+function evidenceLink(item) {
+  return `[${item.path}:${item.startLine}${item.endLine === item.startLine ? "" : `-${item.endLine}`}](${item.path}#L${item.startLine})`;
+}
+function factLine(fact) {
+  const evidence2 = fact.evidence.length ? ` \u2014 ${fact.evidence.map(evidenceLink).join(", ")}` : " \u2014 no direct file evidence";
+  return `- **${fact.label}:** ${fact.value}${evidence2}`;
+}
+function section(title, facts2) {
+  return `## ${title}
+
+${facts2.length ? facts2.map(factLine).join("\n") : "No evidence detected."}`;
+}
+function mermaidId(value) {
+  return `n${[...value].map((char) => char.charCodeAt(0).toString(16)).join("")}`;
+}
+function escapeMermaid(value) {
+  return value.replaceAll('"', "'");
+}
+function generateProjectGuide(report, style, template, instruction = "") {
+  const model = analyzeProject(report);
+  const imports = model.imports.length ? `## Dependency map
+
+\`\`\`mermaid
+flowchart LR
+${model.imports.slice(0, 120).map((edge) => `  ${mermaidId(edge.from)}["${escapeMermaid(edge.from)}"] -->|imports| ${mermaidId(edge.to)}["${escapeMermaid(edge.to)}"]`).join("\n")}
+\`\`\`` : "## Dependency map\n\nNo import relationships detected.";
+  const overview = [
+    section("How to run this project", model.runCommands),
+    section("Architecture overview", [...model.manifests, ...model.entryPoints, ...model.infrastructure]),
+    section("Important files", [...model.manifests, ...model.entryPoints, ...model.databases, ...model.tests]),
+    section("Public APIs", model.publicApis),
+    section("Configuration reference", model.configuration),
+    section("Dependency map", model.dependencies),
+    imports,
+    section("Risk and maintenance notes", [...model.risks, ...model.recommendations]),
+    section("Recommended reading order", [...model.entryPoints, ...model.manifests, ...model.publicApis.slice(0, 10)])
+  ].join("\n\n");
+  return `${generateMarkdown(report, style, template, instruction)}
+
+# Project model
+
+${overview}
+`;
+}
+function generateMermaid(report) {
+  const model = analyzeProject(report);
+  const edges = model.imports.slice(0, 200).map((edge) => `  ${mermaidId(edge.from)}["${escapeMermaid(edge.from)}"] --> ${mermaidId(edge.to)}["${escapeMermaid(edge.to)}"]`);
+  return `flowchart LR
+${edges.length ? edges.join("\n") : '  project["Project files"]'}
+`;
+}
+function generateLlms(report) {
+  const model = analyzeProject(report);
+  return ["# Project context", "", "Generated deterministically by Zygor-to-MD.", "", "## Start here", ...model.entryPoints.map(factLine), ...model.runCommands.map(factLine), "", "## Important source", ...model.publicApis.slice(0, 40).map(factLine), "", "## Configuration", ...model.configuration.slice(0, 40).map(factLine), "", "## Files", ...report.files.map((file) => `- ${file.path} (${file.status}, ${file.size} bytes)`), ""].join("\n");
+}
+function generateContextPack(report) {
+  const model = analyzeProject(report);
+  return JSON.stringify({ schema: "zygor-to-md/context-pack/v1", model, files: report.files.filter((file) => file.text !== void 0).map((file) => ({ path: file.path, sha256: file.sha256, text: file.text })) }, null, 2);
+}
+function generateSarif(report) {
+  const model = analyzeProject(report);
+  return JSON.stringify({ version: "2.1.0", $schema: "https://json.schemastore.org/sarif-2.1.0.json", runs: [{ tool: { driver: { name: "Zygor-to-MD", version: "1" } }, results: model.risks.map((risk) => ({ ruleId: risk.label.toLowerCase().replaceAll(" ", "-"), level: "warning", message: { text: risk.value }, locations: risk.evidence.map((item) => ({ physicalLocation: { artifactLocation: { uri: item.path }, region: { startLine: item.startLine, endLine: item.endLine } } })) })) }] }, null, 2);
+}
+function htmlEscape(value) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+function generateHtml(report, style, template, instruction = "") {
+  const markdown = generateProjectGuide(report, style, template, instruction);
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Project guide</title><style>body{max-width:1100px;margin:40px auto;padding:0 24px;font:16px system-ui;line-height:1.5;color:#17231f}pre{white-space:pre-wrap;background:#f3f6f1;padding:16px;border-radius:8px}code{background:#eef2eb;padding:2px 4px}</style><main><pre>${htmlEscape(markdown)}</pre></main></html>`;
+}
+
 // src/action.ts
+var execFileAsync = promisify(execFile);
 function input(name, fallback = "") {
   return process.env[`INPUT_${name.toUpperCase().replaceAll("-", "_")}`] || fallback;
 }
@@ -10007,26 +10167,44 @@ async function main() {
   const exclude = input("exclude").split(",").map((value) => value.trim()).filter(Boolean);
   const maxFiles = numberInput("max-files", 2e3);
   const maxBytes = numberInput("max-uncompressed-mb", 100) * 1024 * 1024;
+  const changedOnly = input("changed-only").toLowerCase() === "true";
+  const failOnWarning = input("fail-on-warning").toLowerCase() === "true";
+  const failOnSecret = input("fail-on-secret").toLowerCase() === "true";
+  const writeOutput = async (path, content) => {
+    await mkdir(dirname(resolve(path)), { recursive: true });
+    await writeFile(resolve(path), content, "utf8");
+  };
   const inputStat = await stat(inputPath);
-  let archive;
+  let report;
   if (inputStat.isDirectory()) {
-    const zip = new import_jszip2.default();
-    async function addDirectory(directory, prefix) {
+    const entries = [];
+    async function collectDirectory(directory, prefix) {
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         const fullPath = resolve(directory, entry.name);
         const archivePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) await addDirectory(fullPath, archivePath);
-        else if (entry.isFile()) zip.file(archivePath, await readFile(fullPath));
+        if (entry.isDirectory()) await collectDirectory(fullPath, archivePath);
+        else if (entry.isFile()) entries.push({ name: archivePath, read: async () => new Uint8Array(await readFile(fullPath)) });
       }
     }
-    await addDirectory(inputPath, "");
-    archive = await zip.generateAsync({ type: "uint8array" });
+    await collectDirectory(inputPath, "");
+    if (changedOnly) {
+      try {
+        const { stdout } = await execFileAsync("git", ["diff", "--name-only", "HEAD^", "HEAD"], { cwd: inputPath });
+        const changed = new Set(stdout.split(/\r?\n/).map((path) => path.trim().replaceAll("\\", "/")).filter(Boolean));
+        for (let index = entries.length - 1; index >= 0; index--) if (!changed.has(entries[index].name)) entries.splice(index, 1);
+      } catch {
+        console.warn("changed-only requested, but the input has no readable Git parent diff; scanning all files.");
+      }
+    }
+    report = await scanEntries(entries, void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
   } else {
-    archive = await readFile(inputPath);
+    report = await scanZip(new Blob([await readFile(inputPath)]), void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
   }
-  const report = await scanZip(new Blob([archive]), void 0, { exclude, maxFiles, maxUncompressedBytes: maxBytes });
-  const markdown = generateMarkdown(report, style, template, instruction);
+  const markdown = generateProjectGuide(report, style, template, instruction);
+  const model = analyzeProject(report);
+  if (failOnSecret && model.risks.some((risk) => risk.label === "Potential secret")) throw new Error("Potential secret detected; fail-on-secret is enabled.");
+  if (failOnWarning && report.warnings.length) throw new Error("Scan warnings detected; fail-on-warning is enabled.");
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, markdown, "utf8");
   console.log(`Generated ${outputPath} (${report.files.length} files scanned).`);
@@ -10034,14 +10212,29 @@ async function main() {
   if (report.warnings.length) console.warn(report.warnings.join("\n"));
   const summaryPath = input("summary");
   if (summaryPath) {
-    await mkdir(dirname(resolve(summaryPath)), { recursive: true });
-    await writeFile(resolve(summaryPath), JSON.stringify(report, null, 2), "utf8");
+    await writeOutput(summaryPath, JSON.stringify(report, null, 2));
   }
   const manifestPath = input("manifest");
   if (manifestPath) {
-    await mkdir(dirname(resolve(manifestPath)), { recursive: true });
-    await writeFile(resolve(manifestPath), generateManifest(report), "utf8");
+    await writeOutput(manifestPath, generateManifest(report));
   }
+  const llmsPath = input("llms");
+  if (llmsPath) await writeOutput(llmsPath, generateLlms(report));
+  const contextPath = input("context-pack");
+  if (contextPath) await writeOutput(contextPath, generateContextPack(report));
+  const sarifPath = input("sarif");
+  if (sarifPath) await writeOutput(sarifPath, generateSarif(report));
+  const htmlPath = input("html");
+  if (htmlPath) await writeOutput(htmlPath, generateHtml(report, style, template, instruction));
+  const mermaidPath = input("mermaid");
+  if (mermaidPath) await writeOutput(mermaidPath, generateMermaid(report));
+  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Zygor-to-MD
+
+- Files scanned: ${report.files.length}
+- Readable files: ${report.files.filter((file) => file.status === "included").length}
+- Preserved files: ${report.files.filter((file) => file.status !== "included").length}
+- Warnings: ${report.warnings.length}
+`);
 }
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);
